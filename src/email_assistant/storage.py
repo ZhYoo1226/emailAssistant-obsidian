@@ -33,7 +33,7 @@ class QdrantStorage(RAGStorage):
         query: str,
         limit: int = 3,
         filter: Optional[dict] = None,
-        score_threshold: float = 0,
+        score_threshold: float = 0.5,
     ) -> list[dict]:
         # Limit the text length to avoid the document being too large for the model
         query = self._normalize_text(query)

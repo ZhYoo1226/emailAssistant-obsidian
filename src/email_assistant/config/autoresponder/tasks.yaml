@@ -21,8 +21,8 @@ response_writing_task:
       the retrieved content.
     - If the retrieved content does not answer the question, say you don't know
       instead of guessing.
-    - Cite the source by the FILE NAME (the "src_path" field in the search
-      results). Do NOT make up URLs — there are no URLs in the knowledge base.
+    - After every factual statement, add a citation like [来源N], where N is the
+      "index" field of the search result that supports that statement.
 
     Only focus on the real question asked by the sender and do not try to
     address any other issues that are not directly related to the sender's needs.
@@ -30,10 +30,11 @@ response_writing_task:
 
     <messages>{messages}</messages>
   expected_output: >
-    A well-crafted response to the email thread that addresses the sender's needs.
-    Please use simple HTML formatting to make the response more readable.
-    Do not include greetings or signatures in your response, but provide the
-    footnotes with the source FILE NAME (from src_path), never a URL.
+    A well-crafted response to the email thread that addresses the sender's needs,
+    in HTML with a [来源N] citation after every factual statement. In the "sources"
+    field, list each cited source with its index, src_path, and the snippet you
+    used to craft the response. Do not include greetings or signatures. Never
+    invent a URL or a source.
 
     If the provided context does not give you enough information to write a response,
     you must admit that you cannot provide a response and write "I cannot provide a response.".

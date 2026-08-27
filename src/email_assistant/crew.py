@@ -17,6 +17,12 @@ from email_assistant.storage import QdrantStorage
 GATEWAY_MAIN_MODEL = os.environ.get("GATEWAY_MAIN_MODEL", "deepseek-v4-pro")
 GATEWAY_FAST_MODEL = os.environ.get("GATEWAY_FAST_MODEL", "deepseek-v4-flash")
 
+# Optional temperature override for the response writer (for debugging
+# hallucination). Leave unset to use the model default.
+RESPONSE_TEMPERATURE = None
+if os.environ.get("RESPONSE_TEMPERATURE"):
+    RESPONSE_TEMPERATURE = float(os.environ["RESPONSE_TEMPERATURE"])
+
 
 class BaseCrew(abc.ABC):
     """
@@ -113,6 +119,9 @@ class AutoResponderCrew(BaseCrew):
 
     @agent
     def response_writer(self) -> Agent:
+        agent_kwargs = {}
+        if RESPONSE_TEMPERATURE is not None:
+            agent_kwargs["temperature"] = RESPONSE_TEMPERATURE
         return Agent(
             config=self.agents_config["response_writer"],
             tools=[
@@ -120,6 +129,7 @@ class AutoResponderCrew(BaseCrew):
             ],
             verbose=True,
             llm=f"openai/{GATEWAY_MAIN_MODEL}",
+            **agent_kwargs,
         )
 
     @task

@@ -32,4 +32,6 @@ class QdrantSearchTool(BaseTool):
     def _run(self, query: str) -> list[dict]:
         logger.info("Received a query to search in the knowledge base: %s", query)
         results = self._qdrant_storage.search(query, limit=5)
+        for index, result in enumerate(results, start=1):
+            result["index"] = index
         return results

@@ -5,8 +5,15 @@ class EmailThreadCategories(BaseModel):
     categories: list[str]
 
 
+class EmailSource(BaseModel):
+    index: int = Field(description="The citation number, matching [来源N] in the content")
+    src_path: str = Field(description="The source file path")
+    snippet: str = Field(description="The retrieved snippet that supports the response")
+
+
 class EmailResponse(BaseModel):
-    content: str = Field(description="HTML content of the email response")
+    content: str = Field(description="HTML content of the email response, with [来源N] citations")
+    sources: list[EmailSource] = Field(description="The sources cited in the response")
 
 
 class Chunk(BaseModel):
