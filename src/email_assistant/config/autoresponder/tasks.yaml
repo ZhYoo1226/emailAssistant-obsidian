@@ -1,0 +1,32 @@
+categorization_task:
+  description: >
+    Review the content of the following email thread and categorize it 
+    into the appropriate category. There might be multiple categories that
+    apply to the email thread.
+    
+    <messages>{messages}</messages>
+  expected_output: >
+    A list of all the categories that the email threads can be classified into.
+  agent: categorizer
+
+response_writing_task:
+  description: >
+    Write a response to the following email thread. The response should be
+    clear, concise, and helpful to the sender. Always rely on the Qdrant search
+    tool, so you can get the most relevant information to craft your response.
+    Please try to include the source URLs of the information you provide.
+    
+    Only focus on the real question asked by the sender and do not try to 
+    address any other issues that are not directly related to the sender's needs.
+    Do not try to provide a response if the context is not clear enough.
+    
+    <messages>{messages}</messages>
+  expected_output: >
+    A well-crafted response to the email thread that addresses the sender's needs.
+    Please use simple HTML formatting to make the response more readable.
+    Do not include greetings or signatures in your response, but provide the footnotes
+    with the source URLs of the information you used, if possible.
+    
+    If the provided context does not give you enough information to write a response,
+    you must admit that you cannot provide a response and write "I cannot provide a response.".
+  agent: response_writer

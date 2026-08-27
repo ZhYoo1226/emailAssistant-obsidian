@@ -1,0 +1,25 @@
+extract_chunks:
+  description: >
+    Review the document you got and extract the chunks from it. Each 
+    chunk should be a separate piece of information that can be easily understood 
+    by a human and is semantically meaningful. If there are two or more chunks that 
+    are closely related, but not put next to each other, you can merge them into 
+    a single chunk. It is important to cover all the important information in the
+    document and make sure that the chunks are logically structured and coherent.
+    
+    <document>{document}</document>
+  expected_output: >
+    A list of semantic chunks with succinct context of information extracted from 
+    the document.
+  agent: chunks_extractor
+
+contextualize_chunks:
+  description: >
+    You are given a set of chunks extracted from a document. For each chunk,
+    write a short, succinct context that situates it within the overall document
+    to improve search retrieval. Return every chunk with BOTH its original
+    content and the context you wrote for it — do not drop the original content.
+  expected_output: >
+    A short succinct context to situate the chunk within the overall document, along
+    with the chunk itself.
+  agent: contextualizer
