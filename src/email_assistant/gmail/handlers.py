@@ -69,9 +69,15 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
             logger.info("The last message is already a draft. Skipping the reply.")
             return
 
-        # Decode the messages and convert them to Markdown
+        # Decode the messages and convert them to Markdown. Skip drafts — they
+        # are the system's own previous replies and must not be fed back into
+        # the categorizer (which would otherwise misfile the thread as spam).
+        non_draft_messages = [
+            message for message in thread.messages
+            if "DRAFT" not in message.label_ids
+        ]
         decoded_messages = [
-            service.decode_message(message) for message in thread.messages
+            service.decode_message(message) for message in non_draft_messages
         ]
         md_messages = [
             markdownify(decoded_message.content) for decoded_message in decoded_messages
