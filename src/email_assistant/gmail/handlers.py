@@ -114,7 +114,7 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
             logger.warning("Response not faithful to sources. Skipping the draft.")
             return
 
-        service.add_draft(thread, content=email_response.content)
+        service.send_message(thread, content=email_response.content)
 
     def _verify_sources(self, email_response: models.EmailResponse) -> bool:
         """

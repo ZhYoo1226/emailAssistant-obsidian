@@ -29,6 +29,7 @@ class GmailServiceAdapter:
     GOOGLE_API_SCOPES = [
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.send",
     ]
     DEFAULT_CHARSET = "utf-8"
     CONTENT_TYPE_PREFERRED = ["text/html", "text/plain"]
@@ -198,10 +199,10 @@ class GmailServiceAdapter:
         content = self._extract_message_content(message)
         return models.DecodedMessage(message=message, content=content)
 
-    def add_draft(self, thread: models.Thread, content: str):
+    def send_message(self, thread: models.Thread, content: str):
         """
-        Add a draft message to the thread. It accepts the HTML content of the message
-        and converts it to plain text internally.
+        Send a reply to the thread. It accepts the HTML content of the message,
+        converts it to plain text internally, and sends it (not a draft).
         :param thread:
         :param content:
         :return:
@@ -228,24 +229,19 @@ class GmailServiceAdapter:
         email_message.attach(plain_part)
         email_message.attach(html_part)
 
-        # Create a dict-like object from the MIMEText object
-        email_draft = {
-            "message": {
-                "threadId": thread.id,
-                "raw": base64.urlsafe_b64encode(
-                    email_message.as_string().encode("utf-8")
-                ).decode(),
-            }
-        }
+        # Send the message directly. Gmail threads it automatically via the
+        # In-Reply-To / References headers, so no threadId is needed here.
+        raw = base64.urlsafe_b64encode(
+            email_message.as_string().encode("utf-8")
+        ).decode()
 
-        # Create the draft message
-        draft = (
+        sent = (
             self._service.users()
-            .drafts()
-            .create(userId="me", body=email_draft)
+            .messages()
+            .send(userId="me", body={"raw": raw})
             .execute()
         )
-        logger.info("Created a draft message: %s", draft)
+        logger.info("Sent a reply message: %s", sent)
 
     def _extract_message_content(self, message: models.Message) -> str:
         """
