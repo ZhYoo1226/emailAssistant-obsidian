@@ -1,97 +1,148 @@
-# webinar-email-assistant-crewai-obsidian
+# Email Assistant — Agentic RAG with CrewAI + Qdrant + Obsidian
 
-This repository contains materials from the hands-on webinar "[Building Intelligent Agentic RAG with CrewAI and 
-Qdrant](https://www.youtube.com/watch?v=soGB3UowTZ0)". It implements an agentic RAG system that uses your existing 
-[Obsidian](https://obsidian.md/) Vault as a knowledge base to draft emails in Gmail Inbox.
+An agentic RAG system that turns your [Obsidian](https://obsidian.md/) vault into a knowledge base, and
+auto-drafts replies to questions that land in your Gmail inbox.
 
-## Software Stack
+When a new email arrives, the system categorizes it and — **only if it looks like a question** — searches
+your knowledge base for relevant notes and writes a reply as a **Gmail draft** (never auto-sent, so you stay
+in control).
 
-The project is built using Python and integrates with external services through their APIs. **The agentic behaviors are 
-implemented using [CrewAI](https://www.crewai.com/), with [Qdrant](https://qdrant.tech/) serving as the memory layer for 
-the system.**
+---
+
+## How it works
+
+Two independent loops run side by side:
+
+```
+┌─────────────────────────────┐        ┌──────────────────────────────────────┐
+│  Obsidian vault (notes)     │        │  Gmail inbox                          │
+│  .md files                  │        │  (polled every 60s)                  │
+└──────────────┬──────────────┘        └──────────────┬───────────────────────┘
+               │  watchdog (real-time)                 │  new unread email
+               ▼                                       ▼
+        chunk + contextualize                    categorize (flash)
+        (flash LLM)                              QUESTION / NOTIFICATION /
+               │                                 NEWSLETTER / SPAM
+               ▼                                       │
+        embed (fastembed, local)                       │  only if QUESTION
+               │                                       ▼
+               ▼                                search knowledge base
+        Qdrant knowledge-base                   (QdrantSearchTool)
+                                                generate reply (pro LLM)
+                                                       │
+                                                       ▼
+                                                save as Gmail draft
+```
+
+### Two CrewAI crews
+
+- **`KnowledgeOrganizingCrew`** — reads a Markdown note, splits it into semantic chunks, adds retrieval
+  context to each chunk, embeds them locally, and stores them in Qdrant.
+- **`AutoResponderCrew`** — categorizes an email thread, and conditionally (only for `QUESTION`) writes a
+  reply grounded in the knowledge base.
+
+### Model assignment
+
+| Agent | Task | Model |
+|---|---|---|
+| `chunks_extractor` | semantic chunking | gateway `deepseek-v4-flash` |
+| `contextualizer` | chunk contextualization | gateway `deepseek-v4-flash` |
+| `categorizer` | email classification | gateway `deepseek-v4-flash` |
+| `response_writer` | reply generation | gateway `deepseek-v4-pro` |
+
+### Knowledge-base sync guarantees
+
+- **Content-hash idempotency** — every chunk stores the SHA-256 of its source file. On startup, a file is
+  re-ingested only if its content changed.
+- **Orphan cleanup** — on startup, chunks whose source file no longer exists in the vault are removed, so the
+  vault is the single source of truth for Qdrant.
+- **Type filtering** — Excalidraw drawings and `.trash/` files are skipped (they are not prose notes).
+
+---
+
+## Tech stack
+
+- [CrewAI](https://www.crewai.com/) `0.95` — agent orchestration
+- [Qdrant](https://qdrant.tech/) — vector store / knowledge base
+- [fastembed](https://github.com/qdrant/fastembed) — local ONNX embeddings (`BAAI/bge-small-en-v1.5`)
+- An **OpenAI-compatible gateway** serving DeepSeek models (all LLM calls)
+- Gmail API (OAuth 2.0)
+
+No GPU required. LLM inference goes through the gateway API; embeddings run locally on CPU.
+
+---
 
 ## Prerequisites
 
-You'll need access to a Qdrant instance, which can be set up in one of two ways:
+- Python **3.10–3.12**
+- [Poetry](https://python-poetry.org/) for dependency management
+- Docker (to run Qdrant locally), **or** a free [Qdrant Cloud](https://cloud.qdrant.io/) account
+- An OpenAI-compatible gateway URL + API key
+- Gmail API credentials (see below)
 
-1. Install and run it locally on your machine.
-2. Sign up for a free account on [Qdrant Cloud](https://cloud.qdrant.io/).
+---
 
-Either option will provide you with a URL to connect to your instance. The cloud version will also provide an API key 
-for authentication.
+## Configuration
 
-You'll need Python 3.10–3.12 installed, and we recommend using Poetry for dependency management. No GPU is required — 
-LLM inference runs over an OpenAI-compatible gateway API, and embeddings run locally via fastembed (ONNX on CPU). Install 
-all necessary libraries with a single command:
-
-```shell
-poetry install
-```
-
-The project runs all of its LLM tasks through a single OpenAI-compatible gateway serving DeepSeek models, and uses a 
-local [fastembed](https://github.com/qdrant/fastembed) model for embeddings — so there are no separate LLM API keys to 
-manage. You only need the gateway's base URL and API key (see Configuration below). CrewAI makes model switching 
-straightforward, so you can point it at any other OpenAI-compatible endpoint if you prefer.
-
-Optionally, you can use [AgentOps](https://agentops.ai/) for observability. This requires signing up for an account and 
-obtaining an API key.
-
-### Configuration
-
-Create a `.env` file in the root directory with the following entries:
+Copy `.env.example` to `.env` and fill in the values:
 
 ```dotenv
 # LLM gateway (OpenAI-compatible)
-GATEWAY_BASE_URL=https://api.upmore.net/v1
+GATEWAY_BASE_URL=https://your-gateway.example.com/v1
 GATEWAY_API_KEY=YOUR_API_KEY
 GATEWAY_MAIN_MODEL=deepseek-v4-pro
 GATEWAY_FAST_MODEL=deepseek-v4-flash
 
-# Local embedding (fastembed)
+# Local embedding model (fastembed)
+# Set HF_ENDPOINT=https://hf-mirror.com if Hugging Face is unreachable.
 EMBEDDING_MODEL_NAME=BAAI/bge-small-en-v1.5
 
-# Qdrant configuration
+# Qdrant (local Docker needs no API key)
 QDRANT_LOCATION=http://localhost:6333
 QDRANT_API_KEY=
 
-# Observability with AgentOps
-# Leave empty if you don't want to use AgentOps
-AGENTOPS_API_KEY=
-
-# Obsidian configuration
-OBSIDIAN_VAULT_PATH=/path/to/vault
+# Obsidian vault path (the knowledge base source)
+OBSIDIAN_VAULT_PATH=/path/to/your/vault
 ```
 
-You can rename `.env.example` to `.env` and fill in the values, or set these as environment variables.
+### Gmail OAuth credentials
 
-#### Google Cloud Credentials
+1. In [Google Cloud Console](https://console.cloud.google.com/), create a project and **enable the Gmail API**.
+2. Configure the OAuth consent screen as **External**, and add your Gmail as a test user.
+3. Create an **OAuth client ID** of type **Desktop app**, download the JSON, and save it as
+   `credentials.json` in the project root.
+4. On first run, a browser opens for you to authorize. A `token.json` is created and reused afterwards.
 
-Beyond environment variables, you'll need to set up Google Cloud Console credentials to access your Gmail account. 
-Follow the [official documentation](https://developers.google.com/gmail/api/quickstart/python) to create a project and 
-generate credentials. Download the credentials file and save it as `credentials.json` in the project's root directory.
+> If you are behind a firewall/GFW, the Python process needs a proxy to reach `www.googleapis.com`:
+> `export HTTPS_PROXY=http://127.0.0.1:7890` (set it in your shell profile).
 
-#### Running Qdrant
+---
 
-To run Qdrant locally, use Docker. The following command pulls the latest Qdrant version and runs it:
+## Running
 
-```shell
-bash scripts/run-qdrant.sh
-```
-
-Access the dashboard at http://localhost:6333/dashboard. Skip this step if you're using Qdrant Cloud.
-
-## Usage
-
-Run the application using:
-
-```shell
+```bash
+poetry install          # install dependencies
+bash scripts/run-qdrant.sh   # start local Qdrant (or use Qdrant Cloud)
 poetry run python main.py
 ```
 
-This launches two threads:
+`main.py` launches two threads:
 
-1. A filesystem watcher that monitors your Obsidian Vault for changes and updates the Qdrant index accordingly
-2. A CrewAI agent that monitors your Gmail inbox and drafts responses based on knowledge stored in the Obsidian Vault
+1. a filesystem watcher that syncs the Obsidian vault into Qdrant,
+2. a Gmail listener that polls the inbox every 60 seconds and processes new unread threads.
 
-For a detailed explanation of the system and its components, refer to the [webinar 
-recording](https://www.youtube.com/watch?v=soGB3UowTZ0) and the source code in this repository.
+Stop with `Ctrl+C` — the Gmail cursor (`last_history_id`) is saved so processing resumes where it left off.
+
+---
+
+## Migration to another machine
+
+The knowledge base is **rebuilt from the vault**, so you don't need to copy Qdrant data:
+
+1. `git clone` the repo, `poetry install`
+2. copy your `.md` vault notes and point `OBSIDIAN_VAULT_PATH` at them
+3. add `.env` (gateway key + vault path) and `credentials.json`
+4. start an empty Qdrant and run `main.py` — the knowledge base re-ingests automatically
+
+Note: chunking/contextualization is LLM-generated (non-deterministic), so a re-ingest is semantically
+equivalent but not byte-identical. For a byte-exact copy, export a Qdrant collection snapshot instead.
