@@ -105,13 +105,21 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
             logger.info("The response is empty. Skipping the reply.")
             return
 
-        # Verify citations before creating the draft: the cited sources must be
-        # real files in the knowledge base, and the reply must be faithful to them.
+        # Verify citations before sending: the cited sources must be real files
+        # in the knowledge base, and the reply must be faithful to them. If the
+        # reply can't be verified, send a graceful "out of scope" reply instead
+        # of staying silent.
         if not self._verify_sources(email_response):
-            logger.warning("Sources could not be verified. Skipping the draft.")
+            logger.warning("Sources could not be verified. Sending fallback reply.")
+            service.send_message(
+                thread, content=self._fallback_reply(last_message.snippet)
+            )
             return
         if not self._verify_faithfulness(email_response):
-            logger.warning("Response not faithful to sources. Skipping the draft.")
+            logger.warning("Response not faithful to sources. Sending fallback reply.")
+            service.send_message(
+                thread, content=self._fallback_reply(last_message.snippet)
+            )
             return
 
         service.send_message(thread, content=email_response.content)
@@ -156,3 +164,16 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
         verdict = (response.choices[0].message.content or "").strip().upper()
         logger.info("Faithfulness verdict: %s", verdict)
         return verdict.startswith("YES")
+
+    def _fallback_reply(self, question_snippet: Optional[str]) -> str:
+        """
+        A graceful "out of scope" reply sent when the knowledge base can't
+        support a faithful answer. Lets the sender know an AI assistant is
+        replying and the question needs the human's attention.
+        """
+        question = (question_snippet or "您的问题").strip()
+        return (
+            "<p>您好，我是智能邮件助手。</p>"
+            f"<p>关于您提到的「{question}」，我的知识库暂时没有足够的资料支撑，"
+            "暂时无法准确回复您。建议您等待本人查看邮件，或通过其他方式联系。谢谢！</p>"
+        )
