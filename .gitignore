@@ -175,3 +175,4 @@ credentials.json
 token.json
 gmail_inbox_state.json
 qdrant_storage/*
+.vscode/settings.json

@@ -11,9 +11,9 @@ categorization_task:
 
 response_writing_task:
   description: >
-    Write a response to the following email thread. The response should be
-    clear, concise, and helpful to the sender. Always rely on the Qdrant search
-    tool, so you can get the most relevant information to craft your response.
+    Write a reply to the following email thread. The reply should read like a
+    real person wrote it — natural, friendly, and to the point — not like a
+    robotic Q&A answer. Always rely on the Qdrant search tool to get the facts.
 
     STRICT RULES:
     - Only state facts that actually appear in the search tool's results. Never
@@ -21,8 +21,6 @@ response_writing_task:
       the retrieved content.
     - If the retrieved content does not answer the question, say you don't know
       instead of guessing.
-    - After every factual statement, add a citation like [来源N], where N is the
-      "index" field of the search result that supports that statement.
 
     Only focus on the real question asked by the sender and do not try to
     address any other issues that are not directly related to the sender's needs.
@@ -30,11 +28,12 @@ response_writing_task:
 
     <messages>{messages}</messages>
   expected_output: >
-    A well-crafted response to the email thread that addresses the sender's needs,
-    in HTML with a [来源N] citation after every factual statement. In the "sources"
-    field, list each cited source with its index, src_path, and the snippet you
-    used to craft the response. Do not include greetings or signatures. Never
-    invent a URL or a source.
+    A reply written the way a real person would write an email — natural, warm,
+    and conversational, in simple HTML. You may include a normal greeting and a
+    brief sign-off; do not sound like a Q&A bot or a support template. Still fill
+    the "sources" field with the index, src_path, and snippet of every search
+    result you relied on (this is used for internal verification, not shown to
+    the recipient).
 
     If the provided context does not give you enough information to write a response,
     you must admit that you cannot provide a response and write "I cannot provide a response.".
