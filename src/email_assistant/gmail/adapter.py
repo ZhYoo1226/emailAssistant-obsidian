@@ -62,7 +62,15 @@ class GmailServiceAdapter:
 
         # User has to log in, because we do not have valid _credentials
         credentials_file = self._credentials_dir / self.CREDENTIALS_FILE_NAME
-        if self._credentials is None or not self._credentials.valid:
+        if (
+            self._credentials is not None
+            and self._credentials.expired
+            and self._credentials.refresh_token
+        ):
+            # Access token expired but we still have a refresh token — refresh
+            # silently instead of prompting the user to re-authorize.
+            self._credentials.refresh(Request())
+        elif self._credentials is None or not self._credentials.valid:
             flow = InstalledAppFlow.from_client_secrets_file(
                 str(credentials_file), self.GOOGLE_API_SCOPES
             )
