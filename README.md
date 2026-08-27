@@ -146,3 +146,34 @@ The knowledge base is **rebuilt from the vault**, so you don't need to copy Qdra
 
 Note: chunking/contextualization is LLM-generated (non-deterministic), so a re-ingest is semantically
 equivalent but not byte-identical. For a byte-exact copy, export a Qdrant collection snapshot instead.
+
+---
+
+## FAQ
+
+**Q: An email is still unread, but the system never processes it. Why?**
+
+A: The system deduplicates with a `last_history_id` cursor (saved in `gmail_inbox_state.json`), not the
+unread/read flag. Once a thread has been processed, it won't be revisited even if it stays unread. To force a
+re-scan of all unread threads, delete `gmail_inbox_state.json` and restart.
+
+**Q: It prompts for Gmail authorization on every restart.**
+
+A: The access token expires after 1 hour. The code now silently refreshes via the refresh token, so restarts
+within ~7 days won't prompt. In Google's OAuth "Testing" mode the refresh token expires after 7 days, so you
+will be re-prompted roughly weekly — a Google limitation, not a bug.
+
+**Q: Excalidraw drawings / trash notes got into the knowledge base.**
+
+A: Both are filtered: Excalidraw `.md` files (detected via the `excalidraw-plugin` frontmatter) and `.trash/`
+files are skipped during ingestion.
+
+**Q: Ingestion is slow.**
+
+A: Each note costs two LLM calls (chunking + contextualization). Ingestion is a one-time cost; afterwards only
+changed notes are re-processed.
+
+**Q: Why did the system not reply to an email?**
+
+A: It only replies to emails categorized as `QUESTION`. `NOTIFICATION`, `NEWSLETTER`, and `SPAM` are skipped
+intentionally.

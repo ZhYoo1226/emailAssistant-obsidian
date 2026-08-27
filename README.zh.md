@@ -137,3 +137,27 @@ poetry run python main.py
 4. 启动一个空的 Qdrant，跑 `main.py` —— 知识库会自动重新入库
 
 注意：切块/上下文化是 LLM 生成的（非确定性），所以重新入库是「语义等价」但非「逐字节一致」。若要逐字节一致，改用 Qdrant collection 快照导出/导入。
+
+---
+
+## 常见问题（FAQ）
+
+**Q：邮件明明还是未读，系统却一直不处理？**
+
+A：系统用 `last_history_id` 游标（存在 `gmail_inbox_state.json`）防重复，而不是看「未读/已读」标记。一个线程处理过后，即使还是未读也不会回头处理。要强制重扫所有未读邮件，删掉 `gmail_inbox_state.json` 再重启。
+
+**Q：每次重启都弹 Gmail 授权？**
+
+A：access token 1 小时就过期。现在代码会通过 refresh token 静默刷新，7 天内重启不会弹。Google「测试模式」的 refresh token 7 天过期，所以大约每周会被要求重新授权一次——这是 Google 的限制，不是 bug。
+
+**Q：Excalidraw 绘图 / 回收站的笔记被灌进知识库了？**
+
+A：两者都已被过滤：Excalidraw 的 `.md`（通过 `excalidraw-plugin` frontmatter 识别）和 `.trash/` 文件在入库时被跳过。
+
+**Q：入库很慢？**
+
+A：每篇笔记要两次 LLM 调用（切块 + 上下文化）。入库是一次性成本，之后只有内容变化的笔记才会重新处理。
+
+**Q：为什么系统没回复某封邮件？**
+
+A：它只回复分类为 `QUESTION` 的邮件，`NOTIFICATION` / `NEWSLETTER` / `SPAM` 会故意跳过。
