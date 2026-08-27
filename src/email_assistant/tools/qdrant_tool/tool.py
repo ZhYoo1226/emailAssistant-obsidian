@@ -11,7 +11,6 @@ logger = logging.getLogger(__name__)
 
 class SearchInput(BaseModel):
     query: str = Field(description="The query to search in the knowledge base.")
-    limit: str = Field(default=10, description="The number of results to return.")
 
 
 class QdrantSearchTool(BaseTool):
@@ -30,9 +29,7 @@ class QdrantSearchTool(BaseTool):
         super().__init__(**data)
         self._qdrant_storage = qdrant_storage
 
-    def _run(self, query: str, limit: int = 10) -> list[dict]:
-        # This method signature reflects the input schema defined in args_schema.
-        # We could also use *args, **kwargs, but this is more explicit.
+    def _run(self, query: str) -> list[dict]:
         logger.info("Received a query to search in the knowledge base: %s", query)
-        results = self._qdrant_storage.search(query, limit)
+        results = self._qdrant_storage.search(query, limit=5)
         return results
