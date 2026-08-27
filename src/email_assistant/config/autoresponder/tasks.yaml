@@ -21,6 +21,8 @@ response_writing_task:
       the retrieved content.
     - If the retrieved content does not answer the question, say you don't know
       instead of guessing.
+    - If the search results do not contain the answer, STOP searching and say you
+      don't know — do NOT keep re-searching with different words.
 
     Only focus on the real question asked by the sender and do not try to
     address any other issues that are not directly related to the sender's needs.
