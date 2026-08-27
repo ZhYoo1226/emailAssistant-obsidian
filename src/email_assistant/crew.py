@@ -129,7 +129,7 @@ class AutoResponderCrew(BaseCrew):
             ],
             verbose=True,
             llm=f"openai/{GATEWAY_MAIN_MODEL}",
-            max_iter=6,
+            max_iter=4,
             **agent_kwargs,
         )
 
