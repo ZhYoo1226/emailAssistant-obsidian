@@ -1,11 +1,11 @@
 # Email Assistant — Agentic RAG with CrewAI + Qdrant + Obsidian
 
 An agentic RAG system that turns your [Obsidian](https://obsidian.md/) vault into a knowledge base, and
-auto-drafts replies to questions that land in your Gmail inbox.
+auto-replies to questions that land in your Gmail inbox.
 
 When a new email arrives, the system categorizes it and — **only if it looks like a question** — searches
-your knowledge base for relevant notes and writes a reply as a **Gmail draft** (never auto-sent, so you stay
-in control).
+your knowledge base for relevant notes and sends a reply directly. If the knowledge base can't support a
+faithful answer, it sends a polite "out of scope" note instead.
 
 ---
 
@@ -31,7 +31,7 @@ Two independent loops run side by side:
                                                 generate reply (pro LLM)
                                                        │
                                                        ▼
-                                                save as Gmail draft
+                                                send reply (or fallback)
 ```
 
 ### Two CrewAI crews
@@ -177,3 +177,15 @@ changed notes are re-processed.
 
 A: It only replies to emails categorized as `QUESTION`. `NOTIFICATION`, `NEWSLETTER`, and `SPAM` are skipped
 intentionally.
+
+**Q: Are replies sent automatically (or saved as drafts)?**
+
+A: Replies are sent automatically via the Gmail API (not saved as drafts). If you prefer manual review before
+sending, change `send_message` back to a draft in `gmail/handlers.py`.
+
+**Q: What happens when the knowledge base can't answer a question?**
+
+A: The reply is checked for faithfulness — a second LLM verifies every claim is supported by the retrieved
+sources. If the check fails (e.g. the model hallucinated an answer), the system sends a polite fallback note:
+"I'm an AI email assistant; my knowledge base doesn't have enough to answer this. Please wait for the owner
+to reply or reach out another way." This keeps hallucinations from reaching senders.
