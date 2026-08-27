@@ -1,8 +1,9 @@
 import logging
 import signal
 from pathlib import Path
+from typing import Any
 
-from watchdog.observers import Observer as FileSystemListener
+from watchdog.observers import Observer
 
 import config
 from email_assistant.gmail.handlers import AgenticAutoReplyHandler
@@ -24,7 +25,7 @@ GMAIL_INBOX_STATE_FILE = WORKING_DIR / "gmail_inbox_state.json"
 logger = logging.getLogger(__name__)
 
 
-def create_filesystem_listener() -> FileSystemListener:
+def create_filesystem_listener() -> Any:
     """
     Watch any changes done in the Obsidian vault and load them into the knowledge base.
     """
@@ -39,7 +40,7 @@ def create_filesystem_listener() -> FileSystemListener:
     event_handler.initialize(config.obsidian_vault_path)
 
     # Observer listens for filesystem events
-    listener = FileSystemListener()
+    listener = Observer()
     listener.schedule(event_handler, config.obsidian_vault_path, recursive=True)
     return listener
 
