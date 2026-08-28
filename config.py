@@ -51,7 +51,7 @@ class FastEmbedFunction(EmbeddingFunction):
         self.model_name = model_name
         self._model = TextEmbedding(model_name=model_name)
 
-    def name(self) -> str:
+    def name(self) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]
         return f"fastembed/{self.model_name}"
 
     def __call__(self, input):
