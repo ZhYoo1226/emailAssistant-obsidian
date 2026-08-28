@@ -23,6 +23,10 @@ response_writing_task:
       instead of guessing.
     - If the search results do not contain the answer, STOP searching and say you
       don't know — do NOT keep re-searching with different words.
+    - Never write citation markers inside the reply content — no "[来源1]",
+      "[1]", "(source 1)" or similar annotations. The reply text the recipient
+      reads must be clean and natural; citations belong only in the internal
+      "sources" field.
 
     Only focus on the real question asked by the sender and do not try to
     address any other issues that are not directly related to the sender's needs.

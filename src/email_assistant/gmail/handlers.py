@@ -1,6 +1,7 @@
 import abc
 import logging
 import os
+import re
 from typing import Optional
 
 from litellm import completion
@@ -23,6 +24,13 @@ FAITHFULNESS_TIMEOUT_SEC = int(os.environ.get("LLM_TIMEOUT_SEC", "180"))
 # base has no answer (see config/autoresponder/tasks.yaml). It is meant for the
 # program, not the recipient, so it must never be sent out as-is.
 NO_RESPONSE_SENTINEL = "I cannot provide a response"
+
+# Citation markers the model may leak into the reply text (e.g. "blodguy_ink[来源1]")
+# despite the prompt forbidding them. Stripped before sending.
+_CITATION_MARKER_RE = re.compile(
+    r"\s*[\[\(](?:来源|source|ref(?:erence)?)\s*\d+[\]\)]", re.IGNORECASE
+)
+_BARE_INDEX_RE = re.compile(r"\s*\[\d+\]")
 
 
 class GmailInboxEventHandler(abc.ABC):
@@ -140,7 +148,17 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
             )
             return
 
-        service.send_message(thread, content=email_response.content)
+        service.send_message(
+            thread, content=self._strip_citation_markers(email_response.content)
+        )
+
+    @staticmethod
+    def _strip_citation_markers(content: Optional[str]) -> Optional[str]:
+        if not content:
+            return content
+        stripped = _CITATION_MARKER_RE.sub("", content)
+        stripped = _BARE_INDEX_RE.sub("", stripped)
+        return stripped.strip() or content
 
     def _verify_sources(self, email_response: models.EmailResponse) -> bool:
         """
