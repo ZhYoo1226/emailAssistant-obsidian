@@ -99,10 +99,11 @@ agentops_api_key = os.environ.get("AGENTOPS_API_KEY") or None
 import functools
 
 import instructor as _instructor
-from litellm import completion as _litellm_completion
-
 from crewai.llm import LLM as _CrewAILLM
-from crewai.utilities.internal_instructor import InternalInstructor as _InternalInstructor
+from crewai.utilities.internal_instructor import (
+    InternalInstructor as _InternalInstructor,
+)
+from litellm import completion as _litellm_completion
 
 LLM_TIMEOUT_SEC = int(os.environ.get("LLM_TIMEOUT_SEC", "180"))
 

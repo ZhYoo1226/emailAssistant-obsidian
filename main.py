@@ -1,8 +1,8 @@
 import logging
-import signal
 import sys
 from pathlib import Path
 from typing import Any
+
 from watchdog.observers import Observer
 
 # Windows consoles default to GBK; CrewAI prints agent logs with characters

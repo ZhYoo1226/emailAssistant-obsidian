@@ -1,4 +1,3 @@
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -9,8 +8,8 @@ class Message(BaseModel):
     content: str
     sender: str
     recipients: str
-    cc: Optional[str]
-    bcc: Optional[str]
+    cc: str | None
+    bcc: str | None
 
 
 class Thread(BaseModel):

@@ -2,19 +2,15 @@ import abc
 import logging
 import os
 import re
-from typing import Optional
 
 from litellm import completion
 from markdownify import markdownify
 
-from email_assistant.gmail import events
 from email_assistant import models
-from email_assistant.crew import AutoResponderCrew
+from email_assistant.crew import GATEWAY_FAST_MODEL, AutoResponderCrew
+from email_assistant.gmail import events
 
 logger = logging.getLogger(__name__)
-
-# Fast gateway model used for the faithfulness check.
-GATEWAY_FAST_MODEL = os.environ.get("GATEWAY_FAST_MODEL", "deepseek-v4-flash")
 
 # Timeout for the faithfulness-check LLM call, so a hung gateway connection
 # cannot block the inbox processing loop forever.
@@ -33,19 +29,19 @@ _CITATION_MARKER_RE = re.compile(
 _BARE_INDEX_RE = re.compile(r"\s*\[\d+\]")
 
 
-class GmailInboxEventHandler(abc.ABC):
+class GmailInboxEventHandler(abc.ABC):  # noqa: B024 — optional-handler pattern
     """
     A generic handler for all the events happening in the Gmail Inbox.
     """
 
-    def on_message_added(self, event: events.MessageAddedEvent):
+    def on_message_added(self, event: events.MessageAddedEvent):  # noqa: B027
         """
         Handle the event when a new message is added to the Gmail Inbox.
         :param event: the event to handle
         """
         pass
 
-    def on_message_deleted(self, event: events.MessageDeletedEvent):
+    def on_message_deleted(self, event: events.MessageDeletedEvent):  # noqa: B027
         """
         Handle the event when a message is deleted from the Gmail Inbox.
         :param event: the event to handle
@@ -62,7 +58,7 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
         self,
         embedder_config: dict,
         qdrant_location: str,
-        qdrant_api_key: Optional[str] = None,
+        qdrant_api_key: str | None = None,
     ):
         crew_builder = AutoResponderCrew(
             embedder_config, qdrant_location, qdrant_api_key
@@ -153,7 +149,7 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
         )
 
     @staticmethod
-    def _strip_citation_markers(content: Optional[str]) -> Optional[str]:
+    def _strip_citation_markers(content: str | None) -> str | None:
         if not content:
             return content
         stripped = _CITATION_MARKER_RE.sub("", content)
@@ -210,7 +206,7 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
         logger.info("Faithfulness verdict: %s", verdict)
         return verdict.startswith("YES")
 
-    def _fallback_reply(self, question_snippet: Optional[str]) -> str:
+    def _fallback_reply(self, question_snippet: str | None) -> str:
         """
         A graceful "out of scope" reply sent when the knowledge base can't
         support a faithful answer. Lets the sender know an AI assistant is

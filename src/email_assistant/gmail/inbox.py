@@ -2,12 +2,12 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Optional
+
 from google.oauth2.credentials import Credentials
 from pydantic import BaseModel, Field
 from watchdog.utils import BaseThread
 
-from email_assistant.gmail import models, events
+from email_assistant.gmail import events, models
 from email_assistant.gmail.adapter import GmailServiceAdapter, HistoryExpiredError
 from email_assistant.gmail.handlers import GmailInboxEventHandler
 
@@ -27,11 +27,12 @@ class GmailInboxState(BaseModel):
     process_all_unread_threads: bool = Field(
         default=False,
         description=(
-            "Decide if all the unread threads should be processed. If set to True, the last message of each "
-            "unread thread will be processed and emit a MessageAddedEvent."
+            "Decide if all the unread threads should be processed. If set to True, the "
+            "last message of each unread thread will be processed and emit a "
+            "MessageAddedEvent."
         ),
     )
-    last_history_id: Optional[int] = None
+    last_history_id: int | None = None
 
     def update_last_history_id(self, new_history_id: int) -> bool:
         """
@@ -52,7 +53,7 @@ class GmailInboxState(BaseModel):
         :param path: the path to load the state
         :return: the loaded state
         """
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             state_json = json.load(f)
             return GmailInboxState(**state_json)
 
@@ -78,15 +79,15 @@ class GmailInboxListener(BaseThread):
     def __init__(
         self,
         credentials_dir: Path,
-        state: Optional[GmailInboxState] = None,
+        state: GmailInboxState | None = None,
         polling_time_sec: int = 1,
-        state_file: Optional[Path] = None,
+        state_file: Path | None = None,
     ):
         super().__init__()
         self._credentials_dir = credentials_dir
         if not self._credentials_dir.exists():
             self._credentials_dir.mkdir(parents=True)
-        self._credentials: Optional[Credentials] = None
+        self._credentials: Credentials | None = None
         self._service: GmailServiceAdapter = GmailServiceAdapter(credentials_dir)
         self._state = GmailInboxState() if state is None else state
         self._handlers: list[GmailInboxEventHandler] = []

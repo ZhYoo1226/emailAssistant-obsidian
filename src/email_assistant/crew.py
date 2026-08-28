@@ -1,5 +1,4 @@
 import os
-from typing import Optional
 
 from crewai import Agent, Crew, Process, Task
 from crewai.llm import LLM
@@ -8,10 +7,10 @@ from crewai.tasks import TaskOutput
 from crewai.tasks.conditional_task import ConditionalTask
 
 from email_assistant import models
+from email_assistant.storage import QdrantStorage
 from email_assistant.tools.qdrant_tool.tool import (
     QdrantSearchTool,
 )
-from email_assistant.storage import QdrantStorage
 
 # Models served by the OpenAI-compatible gateway (see config.py).
 GATEWAY_MAIN_MODEL = os.environ.get("GATEWAY_MAIN_MODEL", "deepseek-v4-pro")
@@ -44,7 +43,7 @@ class BaseCrew:
         self,
         embedder_config: dict,
         qdrant_location: str,
-        qdrant_api_key: Optional[str] = None,
+        qdrant_api_key: str | None = None,
     ):
         self.embedder_config = embedder_config
         self.qdrant_location = qdrant_location
@@ -52,7 +51,7 @@ class BaseCrew:
         # A single shared storage instance: both the search tool and the
         # handler use it, so we must not create one per knowledge_base() call
         # (each would open its own Qdrant client and reload the embedder).
-        self._knowledge_base: Optional[QdrantStorage] = None
+        self._knowledge_base: QdrantStorage | None = None
 
     def knowledge_base(self) -> QdrantStorage:
         if self._knowledge_base is None:

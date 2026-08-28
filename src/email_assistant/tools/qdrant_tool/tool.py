@@ -1,5 +1,5 @@
 import logging
-from typing import Type, Any
+from typing import Any
 
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
@@ -23,7 +23,7 @@ class QdrantSearchTool(BaseTool):
         "A tool that can be used to search in the knowledge base using Qdrant. "
         "The knowledge base acts as a ground truth for the relevant information."
     )
-    args_schema: Type[BaseModel] = SearchInput
+    args_schema: type[BaseModel] = SearchInput
 
     def __init__(self, qdrant_storage: QdrantStorage, /, **data: Any):
         super().__init__(**data)

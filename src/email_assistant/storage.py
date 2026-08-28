@@ -1,6 +1,6 @@
 import os
 import uuid
-from typing import Optional, List, Any, Dict
+from typing import Any
 
 from qdrant_client import QdrantClient, models
 
@@ -25,10 +25,10 @@ class QdrantStorage:
         self,
         type: str,
         allow_reset: bool = True,
-        embedder_config: Optional[Any] = None,
+        embedder_config: Any | None = None,
         crew: Any = None,
-        qdrant_location: Optional[str] = None,
-        qdrant_api_key: Optional[str] = None,
+        qdrant_location: str | None = None,
+        qdrant_api_key: str | None = None,
     ):
         self.type = type
         # The project passes config.embedder_config, a dict with the callable
@@ -43,8 +43,8 @@ class QdrantStorage:
         self,
         query: str,
         limit: int = 3,
-        filter: Optional[dict] = None,
-        score_threshold: Optional[float] = None,
+        filter: dict | None = None,
+        score_threshold: float | None = None,
     ) -> list[dict]:
         # Limit the text length to avoid the document being too large for the model
         query = self._normalize_text(query)
@@ -76,10 +76,10 @@ class QdrantStorage:
     def reset(self) -> None:
         self.app.delete_collection(self.type)
 
-    def save(self, value: str, metadata: Dict[str, Any]) -> None:
+    def save(self, value: str, metadata: dict[str, Any]) -> None:
         """Save a single entry (see save_batch for the actual logic)."""
         self.save_batch([(value, metadata)])
-    def save_batch(self, entries: List[tuple[str, Dict[str, Any]]]) -> None:
+    def save_batch(self, entries: list[tuple[str, dict[str, Any]]]) -> None:
         """
         Save multiple entries in one go: a single embedding call for all the
         values and a single Qdrant upsert. Much faster than per-chunk round
@@ -105,23 +105,23 @@ class QdrantStorage:
                     vector=embedding,
                     payload={"value": value, "metadata": metadata},
                 )
-                for embedding, value, metadata in zip(embeddings, values, metadatas)
+                for embedding, value, metadata in zip(embeddings, values, metadatas, strict=True)
             ],
         )
 
-    def delete(self, filter: Optional[dict] = None) -> None:
+    def delete(self, filter: dict | None = None) -> None:
         self.app.delete(
             self.type,
             points_selector=self._to_qdrant_filter(filter),
         )
 
-    def count(self, filter: Optional[dict] = None) -> int:
+    def count(self, filter: dict | None = None) -> int:
         return self.app.count(
             self.type,
             count_filter=self._to_qdrant_filter(filter),
         ).count
 
-    def get_metadata_value(self, filter: dict, key: str) -> Optional[Any]:
+    def get_metadata_value(self, filter: dict, key: str) -> Any | None:
         """
         Return the value of a metadata key from the first point matching the
         filter, or None if no point matches. Used to read per-file bookkeeping
@@ -205,7 +205,7 @@ class QdrantStorage:
         truncated = encoded[: self.MAX_LENGTH_BYTES]
         return truncated.decode("utf-8", errors="ignore")
 
-    def _to_qdrant_filter(self, filter: Optional[dict]) -> Optional[models.Filter]:
+    def _to_qdrant_filter(self, filter: dict | None) -> models.Filter | None:
         """
         Convert dictionary filter to Qdrant filter. For now only supports exact match.
         :param filter:

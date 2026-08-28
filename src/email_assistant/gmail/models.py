@@ -1,5 +1,4 @@
 import logging
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -12,9 +11,9 @@ class Header(BaseModel):
 
 
 class MessagePartBody(BaseModel):
-    attachment_id: Optional[str] = Field(default=None, alias="attachmentId")
+    attachment_id: str | None = Field(default=None, alias="attachmentId")
     size: int
-    data: Optional[str] = None
+    data: str | None = None
 
 
 class MessagePart(BaseModel):
@@ -23,24 +22,24 @@ class MessagePart(BaseModel):
     filename: str
     headers: list[Header]
     body: MessagePartBody
-    parts: Optional[list["MessagePart"]] = None
+    parts: list["MessagePart"] | None = None
 
 
 class Message(BaseModel):
     id: str
     thread_id: str = Field(alias="threadId")
-    label_ids: Optional[list[str]] = Field(default=None, alias="labelIds")
-    snippet: Optional[str] = None
-    history_id: Optional[str] = Field(default=None, alias="historyId")
-    internal_date: Optional[str] = Field(default=None, alias="internalDate")
-    payload: Optional[MessagePart] = None
-    size_estimate: Optional[int] = Field(default=None, alias="sizeEstimate")
-    raw: Optional[str] = None
+    label_ids: list[str] | None = Field(default=None, alias="labelIds")
+    snippet: str | None = None
+    history_id: str | None = Field(default=None, alias="historyId")
+    internal_date: str | None = Field(default=None, alias="internalDate")
+    payload: MessagePart | None = None
+    size_estimate: int | None = Field(default=None, alias="sizeEstimate")
+    raw: str | None = None
 
     def __str__(self):
         return f"Message(id={self.id}, thread_id={self.thread_id}, snippet={self.snippet}, ...)"
 
-    def get_header_value(self, name: str) -> Optional[str]:
+    def get_header_value(self, name: str) -> str | None:
         # payload is Optional and headers may be missing on exotic messages
         if self.payload is None or not self.payload.headers:
             return None
@@ -52,7 +51,7 @@ class Message(BaseModel):
 
 class Thread(BaseModel):
     id: str
-    snippet: Optional[str] = None
+    snippet: str | None = None
     history_id: str = Field(alias="historyId")
     messages: list[Message]
 

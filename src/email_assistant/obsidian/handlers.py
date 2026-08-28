@@ -2,19 +2,18 @@ import hashlib
 import logging
 import time
 from pathlib import Path
-from typing import Optional
 
 import yaml
 from watchdog.events import (
-    FileSystemEventHandler,
     DirCreatedEvent,
-    FileCreatedEvent,
     DirDeletedEvent,
-    FileDeletedEvent,
     DirModifiedEvent,
-    FileModifiedEvent,
     DirMovedEvent,
+    FileCreatedEvent,
+    FileDeletedEvent,
+    FileModifiedEvent,
     FileMovedEvent,
+    FileSystemEventHandler,
 )
 
 from email_assistant import models
@@ -35,15 +34,16 @@ FILE_READ_RETRY_DELAY_SEC = 0.5
 
 class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
     """
-    An event handler for the changes done in the Obsidian Vault. It handles the synchronization between
-    the filesystem and the Qdrant knowledge base used by the crew.
+    An event handler for the changes done in the Obsidian Vault. It handles the
+    synchronization between the filesystem and the Qdrant knowledge base used
+    by the crew.
     """
 
     def __init__(
         self,
         embedder_config: dict,
         qdrant_location: str,
-        qdrant_api_key: Optional[str] = None,
+        qdrant_api_key: str | None = None,
         min_content_length: int = 10,
     ):
         crew = KnowledgeOrganizingCrew(embedder_config, qdrant_location, qdrant_api_key)
@@ -263,9 +263,10 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
 
     def on_modified(self, event: DirModifiedEvent | FileModifiedEvent) -> None:
         """
-        When the file is modified, remove all the existing content related to this file in Qdrant,
-        and then load the new content. Ignore directories, as modifications to directories themselves
-        do not mean anything in terms of the content.
+        When the file is modified, remove all the existing content related to
+        this file in Qdrant, and then load the new content. Ignore directories,
+        as modifications to directories themselves do not mean anything in
+        terms of the content.
         :param event:
         :return:
         """

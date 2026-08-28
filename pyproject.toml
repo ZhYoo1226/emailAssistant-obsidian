@@ -1,8 +1,8 @@
 [project]
-name = "webinar-email-assistant-crewai-obsidian"
+name = "email-assistant-obsidian"
 version = "0.1.0"
 description = "An implementation of a CrewAI agent acting as a personal assistant. The agent can draft emails based on the knowledge base built in Obsidian."
-authors = [{ name = "Kacper Łukawski", email = "kacper.lukawski@qdrant.com" }]
+authors = [{ name = "ZhYoo1226" }]
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [
@@ -19,7 +19,27 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["ruff>=0.8.6"]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.8.6",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# Keep the default rules plus bug-prone patterns; the full ALL set flags too
+# much stylistic churn on an existing codebase.
+select = ["E", "F", "W", "B", "I", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# tests deliberately reach into "private" helpers; the strip-marker tests
+# intentionally strip multi-char strings (B005 flags single-char-prefix strips)
+"tests/*" = ["B011", "B005"]
+# config.py's patch block must run after the gateway env vars are set;
+# main.py must reconfigure stdout/stderr to UTF-8 before any import that prints
+"config.py" = ["E402"]
+"main.py" = ["E402"]
 
 [tool.uv]
 package = true

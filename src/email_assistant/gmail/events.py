@@ -1,10 +1,10 @@
 import abc
 
-from email_assistant.gmail.adapter import GmailServiceAdapter
 from email_assistant.gmail import models
+from email_assistant.gmail.adapter import GmailServiceAdapter
 
 
-class BaseGmailEvent(abc.ABC):
+class BaseGmailEvent(abc.ABC):  # noqa: B024 — marker base class; subclassing is what matters
     """
     A base class for all the events happening in the Gmail Inbox.
     """

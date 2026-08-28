@@ -2,11 +2,10 @@ import base64
 import logging
 import os
 import time
+from collections.abc import Generator
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from functools import lru_cache
 from pathlib import Path
-from typing import Optional, Generator
 
 import google_auth_httplib2
 from bs4 import BeautifulSoup
@@ -50,8 +49,8 @@ class GmailServiceAdapter:
         self._credentials_dir = credentials_dir
         if not self._credentials_dir.exists():
             self._credentials_dir.mkdir(parents=True)
-        self._credentials: Optional[Credentials] = None
-        self._service: Optional[Resource] = None
+        self._credentials: Credentials | None = None
+        self._service: Resource | None = None
 
     def is_authenticated(self) -> bool:
         """
@@ -215,11 +214,15 @@ class GmailServiceAdapter:
                 # connection mid-flight (e.g. WinError 10053). Back off and
                 # retry instead of letting the exception kill the polling
                 # thread for good.
-                logger.error("Connection error occurred: %s. Retrying in %ss...", e, self._CONNECTION_RETRY_DELAY_SEC)
+                logger.error(
+                    "Connection error occurred: %s. Retrying in %ss...",
+                    e,
+                    self._CONNECTION_RETRY_DELAY_SEC,
+                )
                 time.sleep(self._CONNECTION_RETRY_DELAY_SEC)
                 continue
 
-    def load_max_history_id(self) -> Optional[int]:
+    def load_max_history_id(self) -> int | None:
         """
         Load the maximum history ID from the Gmail service. It loads just the last
         message and takes its history ID.
@@ -262,8 +265,7 @@ class GmailServiceAdapter:
         )
         return models.Thread(**full_thread)
 
-    @lru_cache
-    def load_full_message(self, message_id: str) -> models.Message:
+    def load_full_message(self, message_id: str) -> models.Message:  # noqa: B019
         """
         Load the full message from the Gmail service.
         :param message_id: the ID of the message to load
@@ -351,7 +353,7 @@ class GmailServiceAdapter:
             email_message.as_string().encode("utf-8")
         ).decode()
 
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
         for attempt in range(3):
             try:
                 sent = (
@@ -409,7 +411,7 @@ class GmailServiceAdapter:
         :param message:
         :return:
         """
-        content: Optional[str] = None
+        content: str | None = None
         charset: str = self.DEFAULT_CHARSET
         for mime_type in self.CONTENT_TYPE_PREFERRED:
             # Convert to lowercase for comparison
@@ -527,8 +529,9 @@ class GmailServiceAdapter:
 
     def _parse_email(self, text: str) -> str:
         """
-        Parse the email content from the formatted text like '"John Done" <johndone@email.com>',
-        so it only returns the email address. If the text is already an email address, it returns it.
+        Parse the email content from the formatted text like
+        '"John Done" <johndone@email.com>', so it only returns the email address.
+        If the text is already an email address, it returns it.
         :param text:
         :return:
         """
