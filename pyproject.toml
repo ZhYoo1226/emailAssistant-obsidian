@@ -1,28 +1,31 @@
-[tool.poetry]
+[project]
 name = "webinar-email-assistant-crewai-obsidian"
 version = "0.1.0"
 description = "An implementation of a CrewAI agent acting as a personal assistant. The agent can draft emails based on the knowledge base built in Obsidian."
-authors = ["Kacper Łukawski <kacper.lukawski@qdrant.com>"]
+authors = [{ name = "Kacper Łukawski", email = "kacper.lukawski@qdrant.com" }]
 readme = "README.md"
-packages = [
-    { include = "email_assistant", from = "src" },
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "qdrant-client>=1.12.2",
+    "fastembed>=0.4.0",
+    "watchdog>=6.0.0",
+    "google-api-python-client>=2.157.0",
+    "google-auth-httplib2>=0.2.0",
+    "google-auth-oauthlib>=1.2.1",
+    "pysocks>=1.7.1",
+    "markdownify>=0.14.1",
+    "crewai[agentops]>=0.95.0",
 ]
 
-[tool.poetry.dependencies]
-python = ">=3.10,<3.13"
-qdrant-client = "^1.12.2"
-fastembed = "^0.4.0"
-watchdog = "^6.0.0"
-google-api-python-client = "^2.157.0"
-google-auth-httplib2 = "^0.2.0"
-google-auth-oauthlib = "^1.2.1"
-pysocks = "^1.7.1"
-markdownify = "^0.14.1"
-crewai = {extras = ["agentops"], version = "^0.95.0"}
+[dependency-groups]
+dev = ["ruff>=0.8.6"]
 
-[tool.poetry.group.dev.dependencies]
-ruff = "^0.8.6"
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/email_assistant"]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"

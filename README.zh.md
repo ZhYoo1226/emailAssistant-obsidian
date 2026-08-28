@@ -68,7 +68,7 @@
 ## 前提条件
 
 - Python **3.10–3.12**
-- 依赖管理：[Poetry](https://python-poetry.org/)（macOS/Linux）或 [uv](https://docs.astral.sh/uv/)（Windows 推荐）
+- 依赖管理：[uv](https://docs.astral.sh/uv/) —— Python 版本和依赖一把抓，缺啥装啥
 - Docker（本地跑 Qdrant），**或** 免费的 [Qdrant Cloud](https://cloud.qdrant.io/) 账号
 - 一个 OpenAI 兼容网关的 URL + API key
 - Gmail API 凭据（见下文）
@@ -113,19 +113,20 @@ OBSIDIAN_VAULT_PATH=/path/to/your/vault
 ## 运行
 
 ```bash
-# macOS / Linux（Poetry）
-poetry install              # 安装依赖
-bash scripts/run-qdrant.sh  # 启动本地 Qdrant（或用 Qdrant Cloud）
-poetry run python main.py
+# 任意系统（uv）—— 缺 Python 的话 uv 会自动装
+bash scripts/run-qdrant.sh   # 启动本地 Qdrant（或用 Qdrant Cloud）
+uv sync                      # 创建 .venv 并安装依赖
+uv run main.py               # 启动助手
+```
+
+防火墙/GFW 环境下，启动前先设代理：
+
+```bash
+export HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890   # macOS / Linux
 ```
 
 ```powershell
-# Windows（uv）
-cd emailAssistant-obsidian
-uv venv .venv --python 3.12
-uv pip install --python .venv\Scripts\python.exe -e "." pysocks
-$env:HTTPS_PROXY = "http://127.0.0.1:7897"; $env:HTTP_PROXY = "http://127.0.0.1:7897"
-& ".venv\Scripts\python.exe" main.py
+$env:HTTPS_PROXY = "http://127.0.0.1:7897"; $env:HTTP_PROXY = "http://127.0.0.1:7897"   # Windows
 ```
 
 `main.py` 会启动两个线程：
@@ -141,7 +142,7 @@ $env:HTTPS_PROXY = "http://127.0.0.1:7897"; $env:HTTP_PROXY = "http://127.0.0.1:
 
 知识库是**从笔记库重建的**，所以无需拷贝 Qdrant 数据：
 
-1. `git clone` 仓库，`poetry install`
+1. `git clone` 仓库，`uv sync`
 2. 拷贝你的 `.md` 笔记库，并把 `OBSIDIAN_VAULT_PATH` 指向它
 3. 补上 `.env`（网关 key + 笔记库路径）和 `credentials.json`
 4. 启动一个空的 Qdrant，跑 `main.py` —— 知识库会自动重新入库

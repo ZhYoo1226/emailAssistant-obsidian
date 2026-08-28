@@ -185,9 +185,9 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
         support a faithful answer. Lets the sender know an AI assistant is
         replying and the question needs the human's attention.
         """
-        question = (question_snippet or "您的问题").strip()
+        question = (question_snippet or "您的问题").strip()[:10]
         return (
-            "<p>您好，我是智能邮件助手。</p>"
-            f"<p>关于您提到的「{question}」，我的知识库暂时没有足够的资料支撑，"
-            "暂时无法准确回复您。建议您等待本人查看邮件，或通过其他方式联系。谢谢！</p>"
+            "<p>你好！我是这边的邮件小助手。</p>"
+            f"<p>你问的「{question}」我暂时拿不准，就不瞎答了，怕误导你。</p>"
+            "<p>本人看到邮件后会尽快回复你；如果比较急，也可以先通过其他方式联系～</p>"
         )

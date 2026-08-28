@@ -75,7 +75,7 @@ No GPU required. LLM inference goes through the gateway API; embeddings run loca
 ## Prerequisites
 
 - Python **3.10–3.12**
-- Dependency management: [Poetry](https://python-poetry.org/) (macOS/Linux) or [uv](https://docs.astral.sh/uv/) (recommended on Windows)
+- Dependency management: [uv](https://docs.astral.sh/uv/) — installs Python and dependencies in one go
 - Docker (to run Qdrant locally), **or** a free [Qdrant Cloud](https://cloud.qdrant.io/) account
 - An OpenAI-compatible gateway URL + API key
 - Gmail API credentials (see below)
@@ -121,19 +121,20 @@ OBSIDIAN_VAULT_PATH=/path/to/your/vault
 ## Running
 
 ```bash
-# macOS / Linux (Poetry)
-poetry install          # install dependencies
+# any OS (uv) — Python itself is managed by uv if missing
 bash scripts/run-qdrant.sh   # start local Qdrant (or use Qdrant Cloud)
-poetry run python main.py
+uv sync                      # create .venv and install dependencies
+uv run main.py               # run the assistant
+```
+
+Behind a firewall/GFW, set the proxy before starting:
+
+```bash
+export HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890   # macOS / Linux
 ```
 
 ```powershell
-# Windows (uv)
-cd emailAssistant-obsidian
-uv venv .venv --python 3.12
-uv pip install --python .venv\Scripts\python.exe -e "." pysocks
-$env:HTTPS_PROXY = "http://127.0.0.1:7897"; $env:HTTP_PROXY = "http://127.0.0.1:7897"
-& ".venv\Scripts\python.exe" main.py
+$env:HTTPS_PROXY = "http://127.0.0.1:7897"; $env:HTTP_PROXY = "http://127.0.0.1:7897"   # Windows
 ```
 
 `main.py` launches two threads:
@@ -149,7 +150,7 @@ Stop with `Ctrl+C` — the Gmail cursor (`last_history_id`) is saved so processi
 
 The knowledge base is **rebuilt from the vault**, so you don't need to copy Qdrant data:
 
-1. `git clone` the repo, `poetry install`
+1. `git clone` the repo, `uv sync`
 2. copy your `.md` vault notes and point `OBSIDIAN_VAULT_PATH` at them
 3. add `.env` (gateway key + vault path) and `credentials.json`
 4. start an empty Qdrant and run `main.py` — the knowledge base re-ingests automatically
