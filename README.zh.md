@@ -55,7 +55,7 @@
 
 ## 技术栈
 
-- [CrewAI](https://www.crewai.com/) `0.95` —— agent 编排
+- [CrewAI](https://www.crewai.com/) `1.15` —— agent 编排
 - [Qdrant](https://qdrant.tech/) —— 向量库 / 知识库
 - [fastembed](https://github.com/qdrant/fastembed) —— 本地 ONNX 嵌入（`BAAI/bge-small-en-v1.5`）
 - **OpenAI 兼容网关**承载 DeepSeek 模型（所有 LLM 调用）
@@ -96,6 +96,13 @@ QDRANT_API_KEY=
 
 # Obsidian 笔记库路径（知识库来源）
 OBSIDIAN_VAULT_PATH=/path/to/your/vault
+
+# 可选调优
+# 每次 LLM 调用的超时（秒，默认 180）
+LLM_TIMEOUT_SEC=180
+# 拒绝 tool_choice 的网关模型（思考型模型），逗号分隔的子串匹配。
+# 命中的模型会回退到 JSON 模式的结构化输出。
+NO_TOOL_CHOICE_MODELS=deepseek-v4,qwen3.8
 ```
 
 ### Gmail OAuth 凭据
@@ -135,6 +142,25 @@ $env:HTTPS_PROXY = "http://127.0.0.1:7897"; $env:HTTP_PROXY = "http://127.0.0.1:
 2. 一个 Gmail 监听器，每 60 秒轮询收件箱并处理新的未读线程。
 
 用 `Ctrl+C` 退出 —— Gmail 游标（`last_history_id`）会被保存，下次接着处理。
+
+### 在 Windows 上作为后台任务运行
+
+安装一个计划任务：登录时自启、崩溃后自动重启：
+
+```powershell
+.\scripts\install-task.ps1                # 安装
+Start-ScheduledTask -TaskName EmailAssistant
+.\scripts\install-task.ps1 -Remove       # 卸载
+```
+
+### 开发
+
+```bash
+uv run ruff check src tests config.py main.py   # 代码检查
+uv run pytest tests/ -q                          # 单元测试
+```
+
+每次 push 和 pull request 时，GitHub Actions CI 也会自动跑这两步（见仓库的 **Actions** 标签页）。
 
 ---
 
@@ -179,4 +205,14 @@ A：回复通过 Gmail API **直接发送**（不存草稿）。如果你希望�
 
 **Q：知识库答不了问题时会发生什么？**
 
-A：回复会先做「忠实性校验」——用第二个 LLM 验证回复的每句话是否被检索到的来源支持。如果校验失败（例如模型幻觉了一个答案），系统会改发一条礼貌的兜底说明：「我是智能邮件助手，我的知识库暂时没有足够资料支撑，请等待本人回复或通过其他方式联系」。这能防止幻觉内容发给对方。
+A：回复在发送前要过几层校验：
+
+1. **来源校验** —— 回复引用的每个来源路径必须真实存在于笔记库中；
+2. **忠实性校验** —— 用第二个 LLM 验证回复的每句话是否被检索到的来源支持，模型幻觉出的答案会在这里被拦下；
+3. 校验失败时，改发一条礼貌的兜底说明：「我是智能邮件助手，我的知识库暂时没有足够资料支撑，请等待本人回复或通过其他方式联系」。
+
+这能防止幻觉内容发给对方。
+
+**Q：回复里会出现 [来源1] 或 [1] 这样的引用标记吗？**
+
+A：不会。来源只作为内部校验依据记录，不会展示给收件人。即使生成文本中漏出了引用标记，发送前也会被自动清除。

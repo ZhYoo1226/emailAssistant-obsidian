@@ -62,7 +62,7 @@ Two independent loops run side by side:
 
 ## Tech stack
 
-- [CrewAI](https://www.crewai.com/) `0.95` — agent orchestration
+- [CrewAI](https://www.crewai.com/) `1.15` — agent orchestration
 - [Qdrant](https://qdrant.tech/) — vector store / knowledge base
 - [fastembed](https://github.com/qdrant/fastembed) — local ONNX embeddings (`BAAI/bge-small-en-v1.5`)
 - An **OpenAI-compatible gateway** serving DeepSeek models (all LLM calls)
@@ -103,6 +103,13 @@ QDRANT_API_KEY=
 
 # Obsidian vault path (the knowledge base source)
 OBSIDIAN_VAULT_PATH=/path/to/your/vault
+
+# Optional tuning
+# Timeout (seconds) for every LLM call (default 180)
+LLM_TIMEOUT_SEC=180
+# Comma-separated substrings of gateway models that reject tool_choice
+# (thinking-mode models). These fall back to JSON-mode structured output.
+NO_TOOL_CHOICE_MODELS=deepseek-v4,qwen3.8
 ```
 
 ### Gmail OAuth credentials
@@ -143,6 +150,25 @@ $env:HTTPS_PROXY = "http://127.0.0.1:7897"; $env:HTTP_PROXY = "http://127.0.0.1:
 2. a Gmail listener that polls the inbox every 60 seconds and processes new unread threads.
 
 Stop with `Ctrl+C` — the Gmail cursor (`last_history_id`) is saved so processing resumes where it left off.
+
+### Run as a background task on Windows
+
+Install a scheduled task that starts the assistant at logon and auto-restarts on crash:
+
+```powershell
+.\scripts\install-task.ps1                # install
+Start-ScheduledTask -TaskName EmailAssistant
+.\scripts\install-task.ps1 -Remove       # uninstall
+```
+
+### Development
+
+```bash
+uv run ruff check src tests config.py main.py   # lint
+uv run pytest tests/ -q                          # unit tests
+```
+
+Both also run automatically in GitHub Actions CI (see the **Actions** tab) on every push and pull request.
 
 ---
 
@@ -196,7 +222,16 @@ sending, change `send_message` back to a draft in `gmail/handlers.py`.
 
 **Q: What happens when the knowledge base can't answer a question?**
 
-A: The reply is checked for faithfulness — a second LLM verifies every claim is supported by the retrieved
-sources. If the check fails (e.g. the model hallucinated an answer), the system sends a polite fallback note:
-"I'm an AI email assistant; my knowledge base doesn't have enough to answer this. Please wait for the owner
-to reply or reach out another way." This keeps hallucinations from reaching senders.
+A: Replies go through multiple verification layers before being sent:
+
+1. **Source verification** — every cited source path must actually exist in the vault.
+2. **Faithfulness check** — a second LLM verifies every claim in the reply is supported by the
+   retrieved sources. If the model hallucinated an answer, the check fails.
+3. On failure, the system sends a polite fallback note: "I'm an AI email assistant; my knowledge
+   base doesn't have enough to answer this. Please wait for the owner to reply or reach out another
+   way." This keeps hallucinations from reaching senders.
+
+**Q: Do replies contain citation markers like [来源1] or [1]?**
+
+A: No. Sources are recorded internally for verification but never shown to the recipient. Any
+citation markers that leak into the generated text are stripped before sending.
