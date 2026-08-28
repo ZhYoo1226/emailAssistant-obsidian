@@ -1,6 +1,7 @@
 import base64
 import logging
 import os
+import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from functools import lru_cache
@@ -35,6 +36,7 @@ class GmailServiceAdapter:
     ]
     DEFAULT_CHARSET = "utf-8"
     CONTENT_TYPE_PREFERRED = ["text/html", "text/plain"]
+    _CONNECTION_RETRY_DELAY_SEC = 30
 
     def __init__(self, credentials_dir: Path):
         self._credentials_dir = credentials_dir
@@ -169,6 +171,14 @@ class GmailServiceAdapter:
             except HttpError as e:
                 logger.error("HTTP error occurred: %s", e)
                 return
+            except (ConnectionError, OSError) as e:
+                # A local proxy or the network can drop an established
+                # connection mid-flight (e.g. WinError 10053). Back off and
+                # retry instead of letting the exception kill the polling
+                # thread for good.
+                logger.error("Connection error occurred: %s. Retrying in %ss...", e, self._CONNECTION_RETRY_DELAY_SEC)
+                time.sleep(self._CONNECTION_RETRY_DELAY_SEC)
+                continue
 
     def load_max_history_id(self) -> Optional[int]:
         """
@@ -257,17 +267,33 @@ class GmailServiceAdapter:
 
         # Send the message directly. Gmail threads it automatically via the
         # In-Reply-To / References headers, so no threadId is needed here.
+        # A dropped connection (e.g. proxy hiccup) aborts the send mid-flight;
+        # retry a few times with backoff so a transient network blip doesn't
+        # silently lose the reply.
         raw = base64.urlsafe_b64encode(
             email_message.as_string().encode("utf-8")
         ).decode()
 
-        sent = (
-            self._service.users()
-            .messages()
-            .send(userId="me", body={"raw": raw})
-            .execute()
-        )
-        logger.info("Sent a reply message: %s", sent)
+        last_error: Optional[Exception] = None
+        for attempt in range(3):
+            try:
+                sent = (
+                    self._service.users()
+                    .messages()
+                    .send(userId="me", body={"raw": raw})
+                    .execute()
+                )
+                logger.info("Sent a reply message: %s", sent)
+                return
+            except (ConnectionError, OSError) as e:
+                last_error = e
+                delay = 10 * (attempt + 1)
+                logger.warning(
+                    "Send attempt %i/3 failed: %s. Retrying in %is...",
+                    attempt + 1, e, delay,
+                )
+                time.sleep(delay)
+        raise last_error
 
     def _extract_message_content(self, message: models.Message) -> str:
         """
