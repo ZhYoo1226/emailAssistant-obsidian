@@ -21,6 +21,14 @@ from email_assistant.gmail import models
 logger = logging.getLogger(__name__)
 
 
+class HistoryExpiredError(Exception):
+    """
+    Raised when Gmail no longer retains history for the requested
+    startHistoryId (HTTP 404). The caller must fall back to a full rescan,
+    otherwise it would poll the expired ID forever and silently do nothing.
+    """
+
+
 class GmailServiceAdapter:
     """
     An adapter over the Gmail API service to simplify the interactions with it and
@@ -114,6 +122,26 @@ class GmailServiceAdapter:
                 "gmail", "v1", credentials=self._credentials, cache_discovery=False
             )
 
+    def _execute_with_retry(self, request):
+        """
+        Execute a Gmail API request, retrying on transient connection errors
+        (local proxy drop, WinError 10053, etc.) with backoff instead of
+        letting the exception kill the listener thread.
+        :param request: a zero-argument callable performing the API call
+        :return: the parsed response
+        """
+        while True:
+            try:
+                return request()
+            except HttpError:
+                raise
+            except (ConnectionError, OSError, TimeoutError) as e:
+                logger.error(
+                    "Connection error occurred: %s. Retrying in %ss...",
+                    e, self._CONNECTION_RETRY_DELAY_SEC,
+                )
+                time.sleep(self._CONNECTION_RETRY_DELAY_SEC)
+
     def iter_unread_threads(self) -> Generator[models.Thread, None, None]:
         """
         Iterate over all the unread threads in the Gmail Inbox.
@@ -122,12 +150,15 @@ class GmailServiceAdapter:
         # Iterate over all the pages of the unread threads
         page_token = None
         while True:
-            response = (
-                self._service.users()
-                .threads()
-                .list(userId="me", q="is:unread", pageToken=page_token)
-                .execute()
-            )
+            def _fetch_page(token=page_token):
+                return (
+                    self._service.users()
+                    .threads()
+                    .list(userId="me", q="is:unread", pageToken=token)
+                    .execute()
+                )
+
+            response = self._execute_with_retry(_fetch_page)
             for thread_descriptor in response.get("threads", []):
                 full_thread = self.load_full_thread(thread_descriptor["id"])
                 yield full_thread
@@ -169,6 +200,14 @@ class GmailServiceAdapter:
                 logger.error("Timeout error occurred. Retrying...")
                 continue
             except HttpError as e:
+                # 404 means Gmail no longer retains history for the requested
+                # startHistoryId (history expires after roughly a week). Raise
+                # so the caller can fall back to a full rescan instead of
+                # silently polling an expired cursor forever.
+                if e.resp.status == 404:
+                    raise HistoryExpiredError(
+                        f"History for startHistoryId={last_history_id} has expired"
+                    ) from e
                 logger.error("HTTP error occurred: %s", e)
                 return
             except (ConnectionError, OSError) as e:
@@ -186,14 +225,24 @@ class GmailServiceAdapter:
         message and takes its history ID.
         :return: the maximum history ID
         """
-        messages = (
-            self._service.users().messages().list(userId="me", maxResults=1).execute()
+        messages = self._execute_with_retry(
+            lambda: (
+                self._service.users()
+                .messages()
+                .list(userId="me", maxResults=1)
+                .execute()
+            )
         )
         if not messages.get("messages", []):
             return None
         message_id = messages["messages"][0]["id"]
-        last_message = (
-            self._service.users().messages().get(userId="me", id=message_id).execute()
+        last_message = self._execute_with_retry(
+            lambda: (
+                self._service.users()
+                .messages()
+                .get(userId="me", id=message_id)
+                .execute()
+            )
         )
         return int(last_message["historyId"])
 
@@ -203,11 +252,13 @@ class GmailServiceAdapter:
         :param thread_id: the ID of the thread to load
         :return: the full thread object
         """
-        full_thread = (
-            self._service.users()
-            .threads()
-            .get(userId="me", id=thread_id, format="full")
-            .execute()
+        full_thread = self._execute_with_retry(
+            lambda: (
+                self._service.users()
+                .threads()
+                .get(userId="me", id=thread_id, format="full")
+                .execute()
+            )
         )
         return models.Thread(**full_thread)
 
@@ -218,11 +269,13 @@ class GmailServiceAdapter:
         :param message_id: the ID of the message to load
         :return: the full message object
         """
-        full_message = (
-            self._service.users()
-            .messages()
-            .get(userId="me", id=message_id, format="full")
-            .execute()
+        full_message = self._execute_with_retry(
+            lambda: (
+                self._service.users()
+                .messages()
+                .get(userId="me", id=message_id, format="full")
+                .execute()
+            )
         )
         return models.Message(**full_message)
 
@@ -246,16 +299,40 @@ class GmailServiceAdapter:
         # Last message is used to get all the metadata
         last_message = thread.messages[-1]
 
+        # Idempotency guard: if this thread already contains a reply to the
+        # same message (matched via In-Reply-To), sending again would
+        # duplicate it. This covers handler redeliveries and retries after a
+        # connection dropped mid-send.
+        reply_to_id = last_message.get_header_value("Message-ID")
+        if reply_to_id and self._thread_already_answered(thread, reply_to_id):
+            logger.info(
+                "Thread already has a reply to message %s. Skipping send.",
+                reply_to_id,
+            )
+            return
+
+        # Headers may be missing on exotic messages; without From/To we
+        # cannot build a valid reply, so skip instead of crashing.
+        to_value = last_message.get_header_value("From")
+        from_value = last_message.get_header_value("To")
+        if not to_value or not from_value:
+            logger.warning(
+                "Missing From/To headers, cannot build a reply: %s", last_message.id
+            )
+            return
+        subject = last_message.get_header_value("Subject") or ""
+
         # Remove HTML to create a plain text version
         plain_content = BeautifulSoup(content, "html.parser").get_text()
 
         # Build the email message
         email_message = MIMEMultipart("alternative")
-        email_message["To"] = self._parse_email(last_message.get_header_value("From"))
-        email_message["From"] = self._parse_email(last_message.get_header_value("To"))
-        email_message["Subject"] = last_message.get_header_value("Subject")
-        email_message["In-Reply-To"] = last_message.get_header_value("Message-ID")
-        email_message["References"] = last_message.get_header_value("Message-ID")
+        email_message["To"] = self._parse_email(to_value)
+        email_message["From"] = self._parse_email(from_value)
+        email_message["Subject"] = subject
+        if reply_to_id:
+            email_message["In-Reply-To"] = reply_to_id
+            email_message["References"] = reply_to_id
 
         # Create the plain and HTML parts
         plain_part = MIMEText(plain_content, "plain")
@@ -287,6 +364,23 @@ class GmailServiceAdapter:
                 return
             except (ConnectionError, OSError) as e:
                 last_error = e
+                # The previous attempt may have reached Gmail before the
+                # connection dropped. Reload the thread and check whether the
+                # reply was already delivered before retrying, to avoid
+                # sending it twice.
+                try:
+                    fresh_thread = self.load_full_thread(thread.id)
+                    if reply_to_id and self._thread_already_answered(
+                        fresh_thread, reply_to_id
+                    ):
+                        logger.info(
+                            "Reply to message %s was delivered by a previous "
+                            "attempt. Skipping retry.",
+                            reply_to_id,
+                        )
+                        return
+                except HttpError:
+                    pass
                 delay = 10 * (attempt + 1)
                 logger.warning(
                     "Send attempt %i/3 failed: %s. Retrying in %is...",
@@ -294,6 +388,20 @@ class GmailServiceAdapter:
                 )
                 time.sleep(delay)
         raise last_error
+
+    def _thread_already_answered(self, thread: models.Thread, message_id: str) -> bool:
+        """
+        Check whether the thread already contains a message replying to the
+        given Message-ID (i.e. some message's In-Reply-To references it).
+        :param thread: the thread to inspect
+        :param message_id: the Message-ID of the message being replied to
+        :return: True if a reply already exists
+        """
+        for message in thread.messages:
+            in_reply_to = message.get_header_value("In-Reply-To")
+            if in_reply_to and message_id in in_reply_to:
+                return True
+        return False
 
     def _extract_message_content(self, message: models.Message) -> str:
         """
@@ -408,11 +516,13 @@ class GmailServiceAdapter:
         if content_type_header:
             content_type = content_type_header.value
             charset_index = content_type.find("charset=")
+            if charset_index == -1:
+                return self.DEFAULT_CHARSET
             charset_index_end = content_type.find(";", charset_index)
             if charset_index_end == -1:
                 charset_index_end = len(content_type)
             charset = content_type[charset_index + len("charset=") : charset_index_end]
-            return charset
+            return charset.strip().strip('"').strip("'")
         return self.DEFAULT_CHARSET
 
     def _parse_email(self, text: str) -> str:

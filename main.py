@@ -3,7 +3,6 @@ import signal
 import sys
 from pathlib import Path
 from typing import Any
-
 from watchdog.observers import Observer
 
 # Windows consoles default to GBK; CrewAI prints agent logs with characters
@@ -17,19 +16,23 @@ from email_assistant.gmail.handlers import AgenticAutoReplyHandler
 from email_assistant.gmail.inbox import GmailInboxListener, GmailInboxState
 from email_assistant.obsidian.handlers import AgenticObsidianVaultToQdrantHandler
 
-import agentops
-
-# Set the default signal handler for SIGINT, so the KeyboardInterrupt exception is raised
-signal.signal(signal.SIGINT, signal.default_int_handler)
-
-# Optional: Initialize AgentOps if the API key is provided
-if config.agentops_api_key is not None:
-    agentops.init(api_key=config.agentops_api_key)
+# Optional: Initialize AgentOps if the API key is provided. crewai>=1.15 no
+# longer ships the agentops extra, so the package itself is optional too.
+try:
+    import agentops
+except ImportError:
+    agentops = None
 
 WORKING_DIR = Path(__file__).parent
 GMAIL_INBOX_STATE_FILE = WORKING_DIR / "gmail_inbox_state.json"
 
 logger = logging.getLogger(__name__)
+
+if config.agentops_api_key is not None:
+    if agentops is None:
+        logger.warning("AGENTOPS_API_KEY is set but agentops is not installed.")
+    else:
+        agentops.init(api_key=config.agentops_api_key)
 
 
 def create_filesystem_listener() -> Any:
@@ -71,11 +74,13 @@ def create_gmail_listener() -> GmailInboxListener:
         config.embedder_config, config.qdrant_location, config.qdrant_api_key
     )
 
-    # Start the listener so that it can monitor the mailbox
+    # Start the listener so that it can monitor the mailbox. The listener
+    # persists the state file periodically, so a crash does not lose progress.
     listener = GmailInboxListener(
         WORKING_DIR,
         state=gmail_state,
         polling_time_sec=60,  # We poll every minute
+        state_file=GMAIL_INBOX_STATE_FILE,
     )
     listener.add_handler(auto_reply_handler)
     return listener
@@ -99,7 +104,7 @@ if __name__ == "__main__":
     try:
         file_system_listener.join()
         gmail_inbox_listener.join()
-    except KeyboardInterrupt as e:
+    except KeyboardInterrupt:
         logger.info("Stopping the monitoring of the filesystem and Gmail inbox...")
 
         file_system_listener.stop()
@@ -109,3 +114,4 @@ if __name__ == "__main__":
         gmail_inbox_listener.state().save(GMAIL_INBOX_STATE_FILE)
 
         logger.info("Monitoring stopped! Exiting.")
+        sys.exit(0)

@@ -15,6 +15,10 @@ logger = logging.getLogger(__name__)
 # Fast gateway model used for the faithfulness check.
 GATEWAY_FAST_MODEL = os.environ.get("GATEWAY_FAST_MODEL", "deepseek-v4-flash")
 
+# Timeout for the faithfulness-check LLM call, so a hung gateway connection
+# cannot block the inbox processing loop forever.
+FAITHFULNESS_TIMEOUT_SEC = int(os.environ.get("LLM_TIMEOUT_SEC", "180"))
+
 # Sentinel the responder task instructs the model to write when the knowledge
 # base has no answer (see config/autoresponder/tasks.yaml). It is meant for the
 # program, not the recipient, so it must never be sent out as-is.
@@ -145,9 +149,17 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
         """
         if not email_response.sources:
             return True
-        indexed_paths = self.knowledge_base.list_src_paths()
+
+        def _normalize(path: str) -> str:
+            # The model often emits JSON-escaped or posix-style paths; compare
+            # on a normalized form so a real citation is not rejected.
+            return os.path.normcase(path.replace("\\\\", "\\").replace("/", "\\"))
+
+        indexed_paths = {
+            _normalize(p) for p in self.knowledge_base.list_src_paths()
+        }
         for source in email_response.sources:
-            if source.src_path not in indexed_paths:
+            if _normalize(source.src_path) not in indexed_paths:
                 logger.warning(
                     "Cited source not in knowledge base: %s", source.src_path
                 )
@@ -174,6 +186,7 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
         response = completion(
             model=f"openai/{GATEWAY_FAST_MODEL}",
             messages=[{"role": "user", "content": prompt}],
+            timeout=FAITHFULNESS_TIMEOUT_SEC,
         )
         verdict = (response.choices[0].message.content or "").strip().upper()
         logger.info("Faithfulness verdict: %s", verdict)

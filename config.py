@@ -78,11 +78,25 @@ agentops_api_key = os.environ.get("AGENTOPS_API_KEY") or None
 # ---------------------------------------------------------------------------
 # Workaround: the gateway's deepseek-v4-* models are "thinking mode" models that
 # reject function calling / tool_choice / response_format ("Thinking mode does
-# not support this tool_choice"). CrewAI uses instructor (function calling) for
-# structured output when the LLM reports function-calling support, so we force it
-# down the plain-prompt JSON path for these models.
+# not support this tool_choice"). CrewAI 1.15 uses instructor for structured
+# output (Task.output_pydantic) on the litellm path regardless of
+# supports_function_calling, so we patch two things:
+#   1. supports_function_calling -> False, forcing the text (non-native) tool
+#      calling path for agents with tools.
+#   2. InternalInstructor's client -> instructor MD_JSON mode for deepseek-v4,
+#      which extracts JSON from the reply text instead of sending tool_choice.
+#      The partial() also injects the timeout that InternalInstructor otherwise
+#      drops (crewai does not forward the LLM instance's timeout there).
 # ---------------------------------------------------------------------------
-from crewai.llm import LLM as _CrewAILLM  # noqa: E402
+import functools
+
+import instructor as _instructor
+from litellm import completion as _litellm_completion
+
+from crewai.llm import LLM as _CrewAILLM
+from crewai.utilities.internal_instructor import InternalInstructor as _InternalInstructor
+
+LLM_TIMEOUT_SEC = int(os.environ.get("LLM_TIMEOUT_SEC", "180"))
 
 _original_supports_function_calling = _CrewAILLM.supports_function_calling
 
@@ -95,3 +109,18 @@ def _supports_function_calling(self) -> bool:
 
 
 _CrewAILLM.supports_function_calling = _supports_function_calling
+
+_original_ii_init = _InternalInstructor.__init__
+
+
+def _ii_init(self, content, model, agent=None, llm=None):
+    _original_ii_init(self, content, model, agent=agent, llm=llm)
+    llm_model = getattr(self.llm, "model", "") or ""
+    if "deepseek-v4" in llm_model and getattr(self.llm, "is_litellm", False):
+        self._client = _instructor.from_litellm(
+            functools.partial(_litellm_completion, timeout=LLM_TIMEOUT_SEC),
+            mode=_instructor.Mode.MD_JSON,
+        )
+
+
+_InternalInstructor.__init__ = _ii_init

@@ -1,19 +1,25 @@
+import os
 import uuid
 from typing import Optional, List, Any, Dict
 
-from crewai.memory.storage.rag_storage import RAGStorage
 from qdrant_client import QdrantClient, models
 
+# Minimum similarity score for a search result to be returned. Kept low
+# because the responder should see near-misses too and decide itself; the
+# faithfulness check downstream filters unsupported claims. Configurable via
+# environment for easy tuning.
+DEFAULT_SCORE_THRESHOLD = float(os.environ.get("QDRANT_SCORE_THRESHOLD", "0.3"))
 
-class QdrantStorage(RAGStorage):
+
+class QdrantStorage:
     """
-    Extends Storage to handle embeddings for memory entries using Qdrant.
+    Storage for knowledge base entries in Qdrant, embedded with the project's
+    local fastembed model. Standalone class: crewai>=1.15 no longer ships
+    crewai.memory.storage.rag_storage.
     """
 
     TEST_STRING = "test"
     MAX_LENGTH_BYTES = 8192
-
-    app: QdrantClient | None = None
 
     def __init__(
         self,
@@ -24,19 +30,27 @@ class QdrantStorage(RAGStorage):
         qdrant_location: Optional[str] = None,
         qdrant_api_key: Optional[str] = None,
     ):
+        self.type = type
+        # The project passes config.embedder_config, a dict with the callable
+        # EmbeddingFunction under the "provider" key (see config.py).
+        self.embedder_config = embedder_config["provider"]
         self._qdrant_location = qdrant_location
         self._qdrant_api_key = qdrant_api_key
-        super().__init__(type, allow_reset, embedder_config, crew)
+        self.app: QdrantClient | None = None
+        self._initialize_app()
 
     def search(
         self,
         query: str,
         limit: int = 3,
         filter: Optional[dict] = None,
-        score_threshold: float = 0.5,
+        score_threshold: Optional[float] = None,
     ) -> list[dict]:
         # Limit the text length to avoid the document being too large for the model
         query = self._normalize_text(query)
+
+        if score_threshold is None:
+            score_threshold = DEFAULT_SCORE_THRESHOLD
 
         # Embed the text and search for similar points
         embedding = self.embedder_config([query])[0]
@@ -63,11 +77,26 @@ class QdrantStorage(RAGStorage):
         self.app.delete_collection(self.type)
 
     def save(self, value: str, metadata: Dict[str, Any]) -> None:
-        # Limit the document length to avoid it being too large for the model
-        value = self._normalize_text(value)
+        """Save a single entry (see save_batch for the actual logic)."""
+        self.save_batch([(value, metadata)])
+    def save_batch(self, entries: List[tuple[str, Dict[str, Any]]]) -> None:
+        """
+        Save multiple entries in one go: a single embedding call for all the
+        values and a single Qdrant upsert. Much faster than per-chunk round
+        trips, especially against a remote (Cloud) Qdrant.
+        :param entries: list of (value, metadata) tuples
+        """
+        if not entries:
+            return
 
-        # Embed the text and search for similar points
-        embedding = self.embedder_config([value])[0]
+        # Limit the document length to avoid it being too large for the model
+        values = [self._normalize_text(value) for value, _ in entries]
+        metadatas = [metadata for _, metadata in entries]
+
+        # Embed all the texts at once
+        embeddings = self.embedder_config(values)
+
+        # Upsert all the points in a single request
         self.app.upsert(
             self.type,
             points=[
@@ -76,6 +105,7 @@ class QdrantStorage(RAGStorage):
                     vector=embedding,
                     payload={"value": value, "metadata": metadata},
                 )
+                for embedding, value, metadata in zip(embeddings, values, metadatas)
             ],
         )
 
@@ -90,6 +120,24 @@ class QdrantStorage(RAGStorage):
             self.type,
             count_filter=self._to_qdrant_filter(filter),
         ).count
+
+    def get_metadata_value(self, filter: dict, key: str) -> Optional[Any]:
+        """
+        Return the value of a metadata key from the first point matching the
+        filter, or None if no point matches. Used to read per-file bookkeeping
+        fields (e.g. total_chunks) without scrolling the whole collection.
+        """
+        points, _ = self.app.scroll(
+            collection_name=self.type,
+            scroll_filter=self._to_qdrant_filter(filter),
+            limit=1,
+            with_payload=True,
+            with_vectors=False,
+        )
+        if not points:
+            return None
+        metadata = points[0].payload.get("metadata") or {}
+        return metadata.get(key)
 
     def list_src_paths(self) -> set[str]:
         """
@@ -116,9 +164,6 @@ class QdrantStorage(RAGStorage):
         return paths
 
     def _initialize_app(self):
-        # Initialize the embedder from given config
-        self._set_embedder_config()
-
         # Initialize the Qdrant client and create the collection if it doesn't exist
         client = QdrantClient(self._qdrant_location, api_key=self._qdrant_api_key)
         if not client.collection_exists(self.type):

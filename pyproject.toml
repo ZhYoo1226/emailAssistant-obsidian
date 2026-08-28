@@ -14,7 +14,8 @@ dependencies = [
     "google-auth-oauthlib>=1.2.1",
     "pysocks>=1.7.1",
     "markdownify>=0.14.1",
-    "crewai[agentops]>=0.95.0",
+    "crewai[agentops,litellm]>=0.95.0",
+    "litellm>=1.84.0",
 ]
 
 [dependency-groups]

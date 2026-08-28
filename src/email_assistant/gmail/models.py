@@ -41,6 +41,9 @@ class Message(BaseModel):
         return f"Message(id={self.id}, thread_id={self.thread_id}, snippet={self.snippet}, ...)"
 
     def get_header_value(self, name: str) -> Optional[str]:
+        # payload is Optional and headers may be missing on exotic messages
+        if self.payload is None or not self.payload.headers:
+            return None
         for header in self.payload.headers:
             if header.name.lower() == name.lower():
                 return header.value

@@ -22,6 +22,16 @@ from email_assistant.crew import KnowledgeOrganizingCrew
 
 logger = logging.getLogger(__name__)
 
+# Watchdog fires several on_modified events for a single save (metadata +
+# content writes), and Obsidian itself rewrites files multiple times within a
+# second. Debounce them into a single re-ingestion.
+MODIFY_DEBOUNCE_SEC = 2.0
+
+# Obsidian (or sync tools) can hold a file locked for a moment while writing.
+# Retry reads a few times before giving up.
+FILE_READ_ATTEMPTS = 5
+FILE_READ_RETRY_DELAY_SEC = 0.5
+
 
 class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
     """
@@ -40,11 +50,45 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         self.crew = crew.crew()
         self.knowledge_base = crew.knowledge_base()
         self.min_content_length = min_content_length
+        self._last_modified_at: dict[str, float] = {}
 
     @staticmethod
-    def _file_hash(path: Path) -> str:
+    def _read_bytes_with_retry(path: Path) -> bytes:
+        """
+        Read the raw file bytes, retrying briefly when the file is locked by
+        the writer (Windows raises PermissionError mid-write).
+        """
+        for attempt in range(1, FILE_READ_ATTEMPTS + 1):
+            try:
+                return path.read_bytes()
+            except PermissionError:
+                if attempt == FILE_READ_ATTEMPTS:
+                    raise
+                logger.warning(
+                    "File locked (%s), retry %d/%d in %.1fs...",
+                    path, attempt, FILE_READ_ATTEMPTS, FILE_READ_RETRY_DELAY_SEC,
+                )
+                time.sleep(FILE_READ_RETRY_DELAY_SEC)
+
+    @classmethod
+    def _file_hash(cls, path: Path) -> str:
         """Return the SHA-256 hash of the file's raw bytes."""
-        return hashlib.sha256(path.read_bytes()).hexdigest()
+        return hashlib.sha256(cls._read_bytes_with_retry(path)).hexdigest()
+
+    @classmethod
+    def _read_text_with_retry(cls, path: Path) -> str:
+        """Read the file text (UTF-8 with BOM tolerance), retrying on locks."""
+        for attempt in range(1, FILE_READ_ATTEMPTS + 1):
+            try:
+                return path.read_text(encoding="utf-8-sig", errors="replace")
+            except PermissionError:
+                if attempt == FILE_READ_ATTEMPTS:
+                    raise
+                logger.warning(
+                    "File locked (%s), retry %d/%d in %.1fs...",
+                    path, attempt, FILE_READ_ATTEMPTS, FILE_READ_RETRY_DELAY_SEC,
+                )
+                time.sleep(FILE_READ_RETRY_DELAY_SEC)
 
     def initialize(self, init_path: Path):
         """
@@ -55,12 +99,22 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         for file_path in Path(init_path).rglob("*.md"):
             file_path_str = str(file_path)
             file_hash = self._file_hash(file_path)
-            points_count = self.knowledge_base.count(
-                {"src_path": file_path_str, "content_hash": file_hash}
+            # Count chunks stored for this exact content hash. Comparing the
+            # count against total_chunks (rather than > 0) detects partially
+            # written files from an interrupted previous ingestion.
+            file_filter = {"src_path": file_path_str, "content_hash": file_hash}
+            points_count = self.knowledge_base.count(file_filter)
+            expected = self.knowledge_base.get_metadata_value(
+                file_filter, "total_chunks"
             )
-            if points_count > 0:
+            if points_count > 0 and expected is not None and points_count >= expected:
                 logger.info("File unchanged, skipping: %s", file_path)
                 continue
+            if points_count > 0:
+                logger.info(
+                    "File partially ingested (%d/%s chunks), re-ingesting: %s",
+                    points_count, expected, file_path,
+                )
 
             self.on_created(
                 FileCreatedEvent(file_path_str, file_path_str, is_synthetic=True)
@@ -100,9 +154,7 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
 
         # Load the file content. UTF-8 with sig handles BOM; errors="replace"
         # avoids crashing the watchdog thread on partially-written files.
-        file_content = (
-            Path(event.src_path).read_text(encoding="utf-8-sig", errors="replace").strip()
-        )
+        file_content = self._read_text_with_retry(Path(event.src_path)).strip()
 
         # Only process the file if the content is longer than the minimum length
         if len(file_content) < self.min_content_length:
@@ -173,16 +225,20 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         file_hash = self._file_hash(Path(event.src_path))
         self.knowledge_base.delete({"src_path": event.src_path})
         document_chunks: models.ContextualizedChunks = response.pydantic  # noqa
+        total_chunks = len(document_chunks.chunks)
+        batch: list[tuple[str, dict]] = []
         for chunk in document_chunks.chunks:
             formatted_input_data = f"{chunk.content}\n\n{chunk.context}"
             metadata = {
                 "src_path": event.src_path,
                 "content_hash": file_hash,
+                "total_chunks": total_chunks,
                 "chunk_context": chunk.context,
                 "chunk_content": chunk.content,
                 **frontmatter,
             }
-            self.knowledge_base.save(formatted_input_data, metadata)
+            batch.append((formatted_input_data, metadata))
+        self.knowledge_base.save_batch(batch)
 
     def on_deleted(self, event: DirDeletedEvent | FileDeletedEvent) -> None:
         """
@@ -219,6 +275,16 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         # Verify if the file is really a Markdown file
         if not event.src_path.endswith(".md"):
             return
+
+        # Debounce: editors and sync tools fire multiple modified events for
+        # a single save. Re-ingesting is expensive (LLM calls), so collapse
+        # events that arrive within the debounce window.
+        now = time.monotonic()
+        last = self._last_modified_at.get(event.src_path)
+        if last is not None and (now - last) < MODIFY_DEBOUNCE_SEC:
+            self._last_modified_at[event.src_path] = now
+            return
+        self._last_modified_at[event.src_path] = now
 
         # Log the event
         logger.info("File modified: %s", event.src_path)

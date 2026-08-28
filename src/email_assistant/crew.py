@@ -1,8 +1,8 @@
-import abc
 import os
 from typing import Optional
 
 from crewai import Agent, Crew, Process, Task
+from crewai.llm import LLM
 from crewai.project import CrewBase, agent, crew, task
 from crewai.tasks import TaskOutput
 from crewai.tasks.conditional_task import ConditionalTask
@@ -23,8 +23,19 @@ RESPONSE_TEMPERATURE = None
 if os.environ.get("RESPONSE_TEMPERATURE"):
     RESPONSE_TEMPERATURE = float(os.environ["RESPONSE_TEMPERATURE"])
 
+# Timeout (seconds) for every LLM call, so a hung gateway connection cannot
+# block an email-processing or ingestion run forever. DeepSeek thinking-mode
+# models can legitimately take a while, so this is generous.
+LLM_TIMEOUT_SEC = int(os.environ.get("LLM_TIMEOUT_SEC", "180"))
 
-class BaseCrew(abc.ABC):
+
+def _gateway_llm(model: str) -> LLM:
+    # crewai 1.15: Agent has no `timeout` param (it was silently ignored);
+    # the timeout belongs on the LLM instance, which passes it to litellm.
+    return LLM(model=f"openai/{model}", timeout=LLM_TIMEOUT_SEC)
+
+
+class BaseCrew:
     """
     Base class for the crews in the project.
     """
@@ -38,14 +49,20 @@ class BaseCrew(abc.ABC):
         self.embedder_config = embedder_config
         self.qdrant_location = qdrant_location
         self.qdrant_api_key = qdrant_api_key
+        # A single shared storage instance: both the search tool and the
+        # handler use it, so we must not create one per knowledge_base() call
+        # (each would open its own Qdrant client and reload the embedder).
+        self._knowledge_base: Optional[QdrantStorage] = None
 
     def knowledge_base(self) -> QdrantStorage:
-        return QdrantStorage(
-            type="knowledge-base",
-            embedder_config=self.embedder_config,
-            qdrant_location=self.qdrant_location,
-            qdrant_api_key=self.qdrant_api_key,
-        )
+        if self._knowledge_base is None:
+            self._knowledge_base = QdrantStorage(
+                type="knowledge-base",
+                embedder_config=self.embedder_config,
+                qdrant_location=self.qdrant_location,
+                qdrant_api_key=self.qdrant_api_key,
+            )
+        return self._knowledge_base
 
 
 @CrewBase
@@ -62,7 +79,7 @@ class KnowledgeOrganizingCrew(BaseCrew):
         return Agent(
             config=self.agents_config["chunks_extractor"],
             verbose=True,
-            llm=f"openai/{GATEWAY_FAST_MODEL}",
+            llm=_gateway_llm(GATEWAY_FAST_MODEL),
         )
 
     @agent
@@ -70,7 +87,7 @@ class KnowledgeOrganizingCrew(BaseCrew):
         return Agent(
             config=self.agents_config["contextualizer"],
             verbose=True,
-            llm=f"openai/{GATEWAY_FAST_MODEL}",
+            llm=_gateway_llm(GATEWAY_FAST_MODEL),
         )
 
     @task
@@ -92,12 +109,13 @@ class KnowledgeOrganizingCrew(BaseCrew):
     @crew
     def crew(self) -> Crew:
         """Creates the KnowledgeOrganizingCrew crew"""
+        # memory=False, so the embedder would never be used; passing the raw
+        # dict also fails crewai 1.15's stricter EmbedderConfig validation.
         return Crew(
             agents=self.agents,  # Automatically created by the @agent decorator
             tasks=self.tasks,  # Automatically created by the @task decorator
             process=Process.sequential,
             memory=False,
-            embedder=self.embedder_config,
             verbose=True,
         )
 
@@ -114,7 +132,7 @@ class AutoResponderCrew(BaseCrew):
         return Agent(
             config=self.agents_config["categorizer"],
             verbose=True,
-            llm=f"openai/{GATEWAY_FAST_MODEL}",
+            llm=_gateway_llm(GATEWAY_FAST_MODEL),
         )
 
     @agent
@@ -128,7 +146,7 @@ class AutoResponderCrew(BaseCrew):
                 QdrantSearchTool(self.knowledge_base()),
             ],
             verbose=True,
-            llm=f"openai/{GATEWAY_MAIN_MODEL}",
+            llm=_gateway_llm(GATEWAY_MAIN_MODEL),
             max_iter=4,
             **agent_kwargs,
         )
@@ -151,12 +169,13 @@ class AutoResponderCrew(BaseCrew):
     @crew
     def crew(self) -> Crew:
         """Creates the AutoResponderCrew crew"""
+        # memory=False, so the embedder would never be used; passing the raw
+        # dict also fails crewai 1.15's stricter EmbedderConfig validation.
         return Crew(
             agents=self.agents,  # Automatically created by the @agent decorator
             tasks=self.tasks,  # Automatically created by the @task decorator
             process=Process.sequential,
             memory=False,
-            embedder=self.embedder_config,
             verbose=True,
         )
 
