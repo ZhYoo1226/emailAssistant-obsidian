@@ -48,7 +48,7 @@ class GmailInboxState(BaseModel):
         :param path: the path to load the state
         :return: the loaded state
         """
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             state_json = json.load(f)
             return GmailInboxState(**state_json)
 
@@ -57,7 +57,7 @@ class GmailInboxState(BaseModel):
         Save the current state of the listener to the specified path.
         :param path: the path to save the state
         """
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             state_json = self.model_dump(mode="json")
             f.write(json.dumps(state_json))
 

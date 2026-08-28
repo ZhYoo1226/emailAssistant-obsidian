@@ -98,8 +98,11 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         # Log the event
         logger.info("New file created: %s", event.src_path)
 
-        # Load the file content
-        file_content = Path(event.src_path).read_text().strip()
+        # Load the file content. UTF-8 with sig handles BOM; errors="replace"
+        # avoids crashing the watchdog thread on partially-written files.
+        file_content = (
+            Path(event.src_path).read_text(encoding="utf-8-sig", errors="replace").strip()
+        )
 
         # Only process the file if the content is longer than the minimum length
         if len(file_content) < self.min_content_length:

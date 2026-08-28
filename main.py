@@ -1,9 +1,16 @@
 import logging
 import signal
+import sys
 from pathlib import Path
 from typing import Any
 
 from watchdog.observers import Observer
+
+# Windows consoles default to GBK; CrewAI prints agent logs with characters
+# like © that crash print() with UnicodeEncodeError. Force UTF-8 with
+# replacement so a log line can never kill an email processing run.
+for _stream in (sys.stdout, sys.stderr):
+    _stream.reconfigure(encoding="utf-8", errors="replace")
 
 import config
 from email_assistant.gmail.handlers import AgenticAutoReplyHandler

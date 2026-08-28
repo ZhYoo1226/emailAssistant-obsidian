@@ -134,14 +134,15 @@ class QdrantStorage(RAGStorage):
                 ),
             )
 
-            # Create a payload index for the filename
-            client.create_payload_index(
-                collection_name=self.type,
-                field_name="metadata.src_path",
-                field_schema=models.KeywordIndexParams(
-                    type=models.KeywordIndexType.KEYWORD
-                ),
-            )
+            # Create payload indexes for the fields used in filters
+            for field in ("metadata.src_path", "metadata.content_hash"):
+                client.create_payload_index(
+                    collection_name=self.type,
+                    field_name=field,
+                    field_schema=models.KeywordIndexParams(
+                        type=models.KeywordIndexType.KEYWORD
+                    ),
+                )
         self.app = client
 
     def _normalize_text(self, text: str) -> str:

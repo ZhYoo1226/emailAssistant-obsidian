@@ -1,11 +1,13 @@
 import base64
 import logging
+import os
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional, Generator
 
+import google_auth_httplib2
 from bs4 import BeautifulSoup
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -83,8 +85,32 @@ class GmailServiceAdapter:
         with open(token_file, "w") as fp:
             fp.write(self._credentials.to_json())
 
-        # Connect to Gmail Service
-        self._service = build("gmail", "v1", credentials=self._credentials)
+        # Connect to Gmail Service. httplib2 ignores HTTP(S)_PROXY env vars, so
+        # build the http object explicitly with the proxy when one is configured,
+        # otherwise requests to googleapis.com time out on firewalled networks.
+        import httplib2
+
+        proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+        if proxy_url:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(proxy_url if "//" in proxy_url else f"http://{proxy_url}")
+            pi = httplib2.ProxyInfo(
+                proxy_type=httplib2.socks.PROXY_TYPE_HTTP,
+                proxy_host=parsed.hostname,
+                proxy_port=parsed.port or 8080,
+            )
+            http = httplib2.Http(proxy_info=pi)
+            authorized_http = google_auth_httplib2.AuthorizedHttp(
+                self._credentials, http=http
+            )
+            self._service = build(
+                "gmail", "v1", http=authorized_http, cache_discovery=False
+            )
+        else:
+            self._service = build(
+                "gmail", "v1", credentials=self._credentials, cache_discovery=False
+            )
 
     def iter_unread_threads(self) -> Generator[models.Thread, None, None]:
         """
