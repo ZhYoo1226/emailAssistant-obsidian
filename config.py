@@ -76,17 +76,25 @@ obsidian_vault_path = os.environ.get("OBSIDIAN_VAULT_PATH")
 agentops_api_key = os.environ.get("AGENTOPS_API_KEY") or None
 
 # ---------------------------------------------------------------------------
-# Workaround: the gateway's deepseek-v4-* models are "thinking mode" models that
-# reject function calling / tool_choice / response_format ("Thinking mode does
-# not support this tool_choice"). CrewAI 1.15 uses instructor for structured
-# output (Task.output_pydantic) on the litellm path regardless of
-# supports_function_calling, so we patch two things:
-#   1. supports_function_calling -> False, forcing the text (non-native) tool
-#      calling path for agents with tools.
-#   2. InternalInstructor's client -> instructor MD_JSON mode for deepseek-v4,
-#      which extracts JSON from the reply text instead of sending tool_choice.
-#      The partial() also injects the timeout that InternalInstructor otherwise
-#      drops (crewai does not forward the LLM instance's timeout there).
+# Workaround patches for the OpenAI-compatible gateway models.
+#
+# crewai 1.15's litellm path has two gaps for us:
+#   1. InternalInstructor (used for Task.output_pydantic) does not forward
+#      the LLM instance's timeout, so a hung gateway call blocks forever.
+#   2. Thinking-mode models (e.g. deepseek-v4) reject tool_choice; crewai
+#      still sends structured-output requests through instructor's default
+#      TOOLS mode, which the gateway refuses.
+#
+# Patches applied below:
+#   1. supports_function_calling -> False for thinking-mode models, forcing
+#      the text (non-native) tool calling path for agents with tools.
+#   2. InternalInstructor always gets a timeout-injected litellm client;
+#      thinking-mode models additionally get instructor MD_JSON mode, which
+#      extracts JSON from the reply text instead of sending tool_choice.
+#
+# The thinking-mode model list is configurable: comma-separated substrings
+# matched against the model name. Models not listed (e.g. glm-5.3) keep
+# native function calling untouched.
 # ---------------------------------------------------------------------------
 import functools
 
@@ -98,12 +106,22 @@ from crewai.utilities.internal_instructor import InternalInstructor as _Internal
 
 LLM_TIMEOUT_SEC = int(os.environ.get("LLM_TIMEOUT_SEC", "180"))
 
+NO_TOOL_CHOICE_MODELS = os.environ.get("NO_TOOL_CHOICE_MODELS", "deepseek-v4")
+
+
+def _rejects_tool_choice(model: str) -> bool:
+    return any(
+        name.strip() and name.strip() in model
+        for name in NO_TOOL_CHOICE_MODELS.split(",")
+    )
+
+
 _original_supports_function_calling = _CrewAILLM.supports_function_calling
 
 
 def _supports_function_calling(self) -> bool:
     model = getattr(self, "model", "") or ""
-    if "deepseek-v4" in model:
+    if _rejects_tool_choice(model):
         return False
     return _original_supports_function_calling(self)
 
@@ -115,12 +133,16 @@ _original_ii_init = _InternalInstructor.__init__
 
 def _ii_init(self, content, model, agent=None, llm=None):
     _original_ii_init(self, content, model, agent=agent, llm=llm)
-    llm_model = getattr(self.llm, "model", "") or ""
-    if "deepseek-v4" in llm_model and getattr(self.llm, "is_litellm", False):
-        self._client = _instructor.from_litellm(
-            functools.partial(_litellm_completion, timeout=LLM_TIMEOUT_SEC),
-            mode=_instructor.Mode.MD_JSON,
-        )
+    if not getattr(self.llm, "is_litellm", False):
+        return
+    kwargs = {}
+    if _rejects_tool_choice(getattr(self.llm, "model", "") or ""):
+        kwargs["mode"] = _instructor.Mode.MD_JSON
+    timeout = getattr(self.llm, "timeout", None) or LLM_TIMEOUT_SEC
+    self._client = _instructor.from_litellm(
+        functools.partial(_litellm_completion, timeout=timeout),
+        **kwargs,
+    )
 
 
 _InternalInstructor.__init__ = _ii_init
