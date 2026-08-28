@@ -75,7 +75,7 @@ No GPU required. LLM inference goes through the gateway API; embeddings run loca
 ## Prerequisites
 
 - Python **3.10–3.12**
-- [Poetry](https://python-poetry.org/) for dependency management
+- Dependency management: [Poetry](https://python-poetry.org/) (macOS/Linux) or [uv](https://docs.astral.sh/uv/) (recommended on Windows)
 - Docker (to run Qdrant locally), **or** a free [Qdrant Cloud](https://cloud.qdrant.io/) account
 - An OpenAI-compatible gateway URL + API key
 - Gmail API credentials (see below)
@@ -121,9 +121,19 @@ OBSIDIAN_VAULT_PATH=/path/to/your/vault
 ## Running
 
 ```bash
+# macOS / Linux (Poetry)
 poetry install          # install dependencies
 bash scripts/run-qdrant.sh   # start local Qdrant (or use Qdrant Cloud)
 poetry run python main.py
+```
+
+```powershell
+# Windows (uv)
+cd emailAssistant-obsidian
+uv venv .venv --python 3.12
+uv pip install --python .venv\Scripts\python.exe -e "." pysocks
+$env:HTTPS_PROXY = "http://127.0.0.1:7897"; $env:HTTP_PROXY = "http://127.0.0.1:7897"
+& ".venv\Scripts\python.exe" main.py
 ```
 
 `main.py` launches two threads:

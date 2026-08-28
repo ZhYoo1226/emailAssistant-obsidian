@@ -68,7 +68,7 @@
 ## 前提条件
 
 - Python **3.10–3.12**
-- [Poetry](https://python-poetry.org/) 用于依赖管理
+- 依赖管理：[Poetry](https://python-poetry.org/)（macOS/Linux）或 [uv](https://docs.astral.sh/uv/)（Windows 推荐）
 - Docker（本地跑 Qdrant），**或** 免费的 [Qdrant Cloud](https://cloud.qdrant.io/) 账号
 - 一个 OpenAI 兼容网关的 URL + API key
 - Gmail API 凭据（见下文）
@@ -113,9 +113,19 @@ OBSIDIAN_VAULT_PATH=/path/to/your/vault
 ## 运行
 
 ```bash
+# macOS / Linux（Poetry）
 poetry install              # 安装依赖
 bash scripts/run-qdrant.sh  # 启动本地 Qdrant（或用 Qdrant Cloud）
 poetry run python main.py
+```
+
+```powershell
+# Windows（uv）
+cd emailAssistant-obsidian
+uv venv .venv --python 3.12
+uv pip install --python .venv\Scripts\python.exe -e "." pysocks
+$env:HTTPS_PROXY = "http://127.0.0.1:7897"; $env:HTTP_PROXY = "http://127.0.0.1:7897"
+& ".venv\Scripts\python.exe" main.py
 ```
 
 `main.py` 会启动两个线程：
