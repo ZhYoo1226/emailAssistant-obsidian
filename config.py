@@ -106,7 +106,9 @@ from crewai.utilities.internal_instructor import InternalInstructor as _Internal
 
 LLM_TIMEOUT_SEC = int(os.environ.get("LLM_TIMEOUT_SEC", "180"))
 
-NO_TOOL_CHOICE_MODELS = os.environ.get("NO_TOOL_CHOICE_MODELS", "deepseek-v4")
+NO_TOOL_CHOICE_MODELS = os.environ.get(
+    "NO_TOOL_CHOICE_MODELS", "deepseek-v4,qwen3.8"
+)
 
 
 def _rejects_tool_choice(model: str) -> bool:
