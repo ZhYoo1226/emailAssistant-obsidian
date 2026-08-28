@@ -15,6 +15,11 @@ logger = logging.getLogger(__name__)
 # Fast gateway model used for the faithfulness check.
 GATEWAY_FAST_MODEL = os.environ.get("GATEWAY_FAST_MODEL", "deepseek-v4-flash")
 
+# Sentinel the responder task instructs the model to write when the knowledge
+# base has no answer (see config/autoresponder/tasks.yaml). It is meant for the
+# program, not the recipient, so it must never be sent out as-is.
+NO_RESPONSE_SENTINEL = "I cannot provide a response"
+
 
 class GmailInboxEventHandler(abc.ABC):
     """
@@ -117,6 +122,15 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
             return
         if not self._verify_faithfulness(email_response):
             logger.warning("Response not faithful to sources. Sending fallback reply.")
+            service.send_message(
+                thread, content=self._fallback_reply(last_message.snippet)
+            )
+            return
+
+        if NO_RESPONSE_SENTINEL in (email_response.content or ""):
+            logger.warning(
+                "Response is the no-answer sentinel. Sending fallback reply."
+            )
             service.send_message(
                 thread, content=self._fallback_reply(last_message.snippet)
             )
