@@ -97,6 +97,10 @@ QDRANT_API_KEY=
 # Obsidian 笔记库路径（知识库来源）
 OBSIDIAN_VAULT_PATH=/path/to/your/vault
 
+# 代理（防火墙/GFW 环境必填，程序启动时自动加载，无需在 shell 里 export）
+# 端口改成你代理软件的 HTTP 端口；网络环境不需要代理时删掉或注释这行
+HTTPS_PROXY=http://127.0.0.1:7890
+
 # 可选调优
 # 每次 LLM 调用的超时（秒，默认 180）
 LLM_TIMEOUT_SEC=180
@@ -113,7 +117,7 @@ NO_TOOL_CHOICE_MODELS=deepseek-v4,qwen3.8
 4. 首次运行会弹出浏览器让你授权，之后生成 `token.json` 复用。
 
 > 若处于防火墙/GFW 环境，Python 进程需要代理才能访问 `www.googleapis.com`：
-> 在 `.env` 里加 `HTTPS_PROXY=http://127.0.0.1:7890`（启动时自动加载）。
+> 在 `.env` 里配置 `HTTPS_PROXY`（见上方配置示例，启动时自动加载，改端口在 `.env` 里改）。
 
 ---
 

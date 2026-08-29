@@ -104,6 +104,11 @@ QDRANT_API_KEY=
 # Obsidian vault path (the knowledge base source)
 OBSIDIAN_VAULT_PATH=/path/to/your/vault
 
+# Proxy (required behind a firewall/GFW; loaded automatically at startup,
+# no shell export needed). Set the HTTP port of YOUR proxy software;
+# delete or comment out on unrestricted networks.
+HTTPS_PROXY=http://127.0.0.1:7890
+
 # Optional tuning
 # Timeout (seconds) for every LLM call (default 180)
 LLM_TIMEOUT_SEC=180
@@ -121,7 +126,7 @@ NO_TOOL_CHOICE_MODELS=deepseek-v4,qwen3.8
 4. On first run, a browser opens for you to authorize. A `token.json` is created and reused afterwards.
 
 > If you are behind a firewall/GFW, the Python process needs a proxy to reach `www.googleapis.com`:
-> add `HTTPS_PROXY=http://127.0.0.1:7890` to your `.env` (loaded automatically at startup).
+> configure `HTTPS_PROXY` in your `.env` (see the example above — loaded automatically at startup).
 
 ---
 
