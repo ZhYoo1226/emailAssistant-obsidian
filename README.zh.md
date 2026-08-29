@@ -24,7 +24,7 @@
         嵌入（fastembed，本地）                        │  仅当是 QUESTION
                │                                       ▼
                ▼                                检索知识库
-        Qdrant 知识库                           （QdrantSearchTool）
+        Qdrant 知识库                           （QdrantHybridSearchTool）
                                                生成回复（pro LLM）
                                                        │
                                                        ▼

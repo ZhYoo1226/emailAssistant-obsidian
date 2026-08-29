@@ -27,7 +27,7 @@ Two independent loops run side by side:
         embed (fastembed, local)                       │  only if QUESTION
                │                                       ▼
                ▼                                search knowledge base
-        Qdrant knowledge-base                   (QdrantSearchTool)
+        Qdrant knowledge-base                   (QdrantHybridSearchTool)
                                                 generate reply (pro LLM)
                                                        │
                                                        ▼

@@ -45,8 +45,7 @@ class QdrantStorage:
         self.reranker = reranker
         self._qdrant_location = qdrant_location
         self._qdrant_api_key = qdrant_api_key
-        self.app: QdrantClient | None = None
-        self._initialize_app()
+        self.app: QdrantClient = self._initialize_app()
 
     def search(
         self,
@@ -86,7 +85,9 @@ class QdrantStorage:
                         limit=rerank_limit,
                     ),
                 ],
-                query=models.FusionQuery(fusion=models.Fusion.RRF),
+                query=models.RrfQuery(
+                    rrf=models.Rrf(k=RRF_K, weights=RRF_WEIGHTS)
+                ),
                 limit=rerank_limit,
             )
         else:
@@ -101,8 +102,8 @@ class QdrantStorage:
         results = [
             {
                 "id": point.id,
-                "metadata": point.payload.get("metadata"),
-                "context": point.payload.get("value"),
+                "metadata": (point.payload or {}).get("metadata"),
+                "context": (point.payload or {}).get("value"),
                 "score": point.score,
             }
             for point in response.points
@@ -217,25 +218,23 @@ class QdrantStorage:
                 break
         return paths
 
-    def _initialize_app(self):
+    def _initialize_app(self) -> QdrantClient:
         # Initialize the Qdrant client and create the collection if it doesn't exist
         client = QdrantClient(self._qdrant_location, api_key=self._qdrant_api_key)
         if not client.collection_exists(self.type):
             # Create an embedding for a dummy value to get the embedding dimensionality
             embedding = self.embedder_config([self.TEST_STRING])[0]
 
-            vectors_config: models.VectorsConfig = models.VectorParams(
-                size=len(embedding),
-                distance=models.Distance.COSINE,
-            )
+            # Always use named vectors, even dense-only: save_batch and
+            # search address the dense vector by DENSE_VECTOR_NAME.
+            vectors_config: models.VectorsConfig = {
+                DENSE_VECTOR_NAME: models.VectorParams(
+                    size=len(embedding),
+                    distance=models.Distance.COSINE,
+                )
+            }
             sparse_vectors_config = None
             if self.sparse_embedder is not None:
-                vectors_config = {
-                    DENSE_VECTOR_NAME: models.VectorParams(
-                        size=len(embedding),
-                        distance=models.Distance.COSINE,
-                    )
-                }
                 # IDF modifier downweights high-frequency terms, improving BM25
                 # discrimination on Chinese text.
                 sparse_vectors_config = {
@@ -272,7 +271,7 @@ class QdrantStorage:
                     f"'{SPARSE_VECTOR_NAME}' vector). Delete it and restart to "
                     "re-ingest the vault with dense+sparse vectors."
                 )
-        self.app = client
+        return client
 
     def _normalize_text(self, text: str) -> str:
         """
