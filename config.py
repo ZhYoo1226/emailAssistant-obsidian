@@ -1,8 +1,10 @@
 import os
 
+import jieba
 from chromadb import EmbeddingFunction
 from dotenv import load_dotenv
-from fastembed import TextEmbedding
+from fastembed import SparseTextEmbedding, TextEmbedding
+from fastembed.rerank.cross_encoder import TextCrossEncoder
 
 # Load dotenv file
 load_dotenv(".env")
@@ -50,6 +52,11 @@ embedding_model_name = os.environ.get(
     "EMBEDDING_MODEL_NAME", "BAAI/bge-small-en-v1.5"
 )
 
+# Sparse (lexical) model for hybrid search; the cross-encoder reranks the
+# fused candidates. Both run locally via fastembed ONNX, CPU-only.
+sparse_model_name = "Qdrant/bm25"
+reranker_model_name = "BAAI/bge-reranker-base"
+
 
 class FastEmbedFunction(EmbeddingFunction):
     """A chromadb-compatible EmbeddingFunction backed by a local fastembed model."""
@@ -67,9 +74,42 @@ class FastEmbedFunction(EmbeddingFunction):
         return [vector.tolist() for vector in self._model.embed(input)]
 
 
+class JiebaBM25Function:
+    """
+    Sparse embedding for Chinese text: jieba segments the text into
+    space-separated tokens, then fastembed's BM25 converts them into sparse
+    vectors. Without pre-segmentation BM25 falls back to whitespace
+    tokenization, which collapses a Chinese sentence into 1-2 tokens.
+    """
+
+    def __init__(self, model_name: str = sparse_model_name):
+        self.model_name = model_name
+        self._model = SparseTextEmbedding(model_name=model_name)
+
+    @staticmethod
+    def _segment(texts: list[str]) -> list[str]:
+        return [" ".join(jieba.cut_for_search(text)) for text in texts]
+
+    def embed(self, texts: list[str]):
+        return list(self._model.embed(self._segment(texts)))
+
+
+class BgeRerankFunction:
+    """Cross-encoder reranker over (query, candidate) pairs, scored locally."""
+
+    def __init__(self, model_name: str = reranker_model_name):
+        self.model_name = model_name
+        self._model = TextCrossEncoder(model_name=model_name)
+
+    def rerank(self, query: str, documents: list[str]) -> list[float]:
+        return [float(score) for score in self._model.rerank(query, documents)]
+
+
 # CrewAI's EmbeddingConfigurator accepts an EmbeddingFunction instance directly
 # when it is placed under the "provider" key.
 embedder_config = {"provider": FastEmbedFunction(embedding_model_name)}
+sparse_embedder = JiebaBM25Function()
+reranker = BgeRerankFunction()
 
 # Qdrant configuration
 qdrant_location = os.environ.get("QDRANT_LOCATION", "http://localhost:6333")

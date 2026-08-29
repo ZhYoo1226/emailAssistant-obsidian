@@ -13,15 +13,17 @@ class SearchInput(BaseModel):
     query: str = Field(description="The query to search in the knowledge base.")
 
 
-class QdrantSearchTool(BaseTool):
+class QdrantHybridSearchTool(BaseTool):
     """
     A tool that can be used to search in the knowledge base using Qdrant.
     """
 
-    name: str = "QdrantSearchTool"
+    name: str = "QdrantHybridSearchTool"
     description: str = (
-        "A tool that can be used to search in the knowledge base using Qdrant. "
-        "The knowledge base acts as a ground truth for the relevant information."
+        "A tool that can be used to search in the knowledge base using Qdrant "
+        "hybrid retrieval (dense semantic + sparse BM25 lexical, fused by RRF "
+        "and reranked by a cross-encoder). The knowledge base acts as a ground "
+        "truth for the relevant information."
     )
     args_schema: type[BaseModel] = SearchInput
 

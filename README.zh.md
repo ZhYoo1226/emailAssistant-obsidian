@@ -56,12 +56,15 @@
 ## 技术栈
 
 - [CrewAI](https://www.crewai.com/) `1.15` —— agent 编排
-- [Qdrant](https://qdrant.tech/) —— 向量库 / 知识库
-- [fastembed](https://github.com/qdrant/fastembed) —— 本地 ONNX 嵌入（`BAAI/bge-small-en-v1.5`）
+- [Qdrant](https://qdrant.tech/) —— 向量库 / 知识库，**混合检索**（稠密 + 稀疏向量 RRF 融合，再经交叉编码器重排）
+- [fastembed](https://github.com/qdrant/fastembed) —— 本地 ONNX 嵌入：`BAAI/bge-small-en-v1.5`（稠密）+ `Qdrant/bm25` 接 jieba 分词（稀疏）+ `BAAI/bge-reranker-base`（重排）
+- [jieba](https://github.com/fxsjy/jieba) —— 中文分词，喂给 BM25 稀疏检索路径
 - **OpenAI 兼容网关**承载 DeepSeek 模型（所有 LLM 调用）
 - Gmail API（OAuth 2.0）
 
-无需 GPU。LLM 推理走网关 API，嵌入在本地 CPU 上运行。
+无需 GPU。LLM 推理走网关 API，嵌入、稀疏向量与重排在本地 CPU 上运行。
+
+> **从旧版本（纯稠密检索）升级？** collection 结构变了（新增了名为 `sparse` 的稀疏向量）。删除现有的 `knowledge-base` collection 再重启即可，笔记库会自动重新入库。
 
 ---
 

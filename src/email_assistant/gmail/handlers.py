@@ -59,9 +59,13 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
         embedder_config: dict,
         qdrant_location: str,
         qdrant_api_key: str | None = None,
+        sparse_embedder=None,
+        reranker=None,
     ):
         crew_builder = AutoResponderCrew(
-            embedder_config, qdrant_location, qdrant_api_key
+            embedder_config, qdrant_location, qdrant_api_key,
+            sparse_embedder=sparse_embedder,
+            reranker=reranker,
         )
         self.crew = crew_builder.crew()
         self.knowledge_base = crew_builder.knowledge_base()

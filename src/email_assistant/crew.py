@@ -1,4 +1,5 @@
 import os
+from typing import Any
 
 from crewai import Agent, Crew, Process, Task
 from crewai.llm import LLM
@@ -9,7 +10,7 @@ from crewai.tasks.conditional_task import ConditionalTask
 from email_assistant import models
 from email_assistant.storage import QdrantStorage
 from email_assistant.tools.qdrant_tool.tool import (
-    QdrantSearchTool,
+    QdrantHybridSearchTool,
 )
 
 # Models served by the OpenAI-compatible gateway (see config.py).
@@ -44,10 +45,14 @@ class BaseCrew:
         embedder_config: dict,
         qdrant_location: str,
         qdrant_api_key: str | None = None,
+        sparse_embedder: Any | None = None,
+        reranker: Any | None = None,
     ):
         self.embedder_config = embedder_config
         self.qdrant_location = qdrant_location
         self.qdrant_api_key = qdrant_api_key
+        self.sparse_embedder = sparse_embedder
+        self.reranker = reranker
         # A single shared storage instance: both the search tool and the
         # handler use it, so we must not create one per knowledge_base() call
         # (each would open its own Qdrant client and reload the embedder).
@@ -60,6 +65,8 @@ class BaseCrew:
                 embedder_config=self.embedder_config,
                 qdrant_location=self.qdrant_location,
                 qdrant_api_key=self.qdrant_api_key,
+                sparse_embedder=self.sparse_embedder,
+                reranker=self.reranker,
             )
         return self._knowledge_base
 
@@ -142,7 +149,7 @@ class AutoResponderCrew(BaseCrew):
         return Agent(
             config=self.agents_config["response_writer"],
             tools=[
-                QdrantSearchTool(self.knowledge_base()),
+                QdrantHybridSearchTool(self.knowledge_base()),
             ],
             verbose=True,
             llm=_gateway_llm(GATEWAY_MAIN_MODEL),

@@ -43,7 +43,10 @@ def create_filesystem_listener() -> Any:
 
     # Handler's methods are going to be called when a file is created, modified, or deleted
     event_handler = AgenticObsidianVaultToQdrantHandler(
-        config.embedder_config, config.qdrant_location, config.qdrant_api_key
+        config.embedder_config,
+        config.qdrant_location,
+        config.qdrant_api_key,
+        sparse_embedder=config.sparse_embedder,
     )
 
     # Initialize the Qdrant collection with existing files
@@ -71,7 +74,11 @@ def create_gmail_listener() -> GmailInboxListener:
 
     # Create an agentic auto-reply handler
     auto_reply_handler = AgenticAutoReplyHandler(
-        config.embedder_config, config.qdrant_location, config.qdrant_api_key
+        config.embedder_config,
+        config.qdrant_location,
+        config.qdrant_api_key,
+        sparse_embedder=config.sparse_embedder,
+        reranker=config.reranker,
     )
 
     # Start the listener so that it can monitor the mailbox. The listener

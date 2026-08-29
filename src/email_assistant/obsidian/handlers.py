@@ -45,8 +45,12 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         qdrant_location: str,
         qdrant_api_key: str | None = None,
         min_content_length: int = 10,
+        sparse_embedder=None,
     ):
-        crew = KnowledgeOrganizingCrew(embedder_config, qdrant_location, qdrant_api_key)
+        crew = KnowledgeOrganizingCrew(
+            embedder_config, qdrant_location, qdrant_api_key,
+            sparse_embedder=sparse_embedder,
+        )
         self.crew = crew.crew()
         self.knowledge_base = crew.knowledge_base()
         self.min_content_length = min_content_length

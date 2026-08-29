@@ -1,14 +1,19 @@
-import os
 import uuid
 from typing import Any
 
 from qdrant_client import QdrantClient, models
 
-# Minimum similarity score for a search result to be returned. Kept low
-# because the responder should see near-misses too and decide itself; the
-# faithfulness check downstream filters unsupported claims. Configurable via
-# environment for easy tuning.
-DEFAULT_SCORE_THRESHOLD = float(os.environ.get("QDRANT_SCORE_THRESHOLD", "0.3"))
+# Named vectors in the collection: dense = bge-small semantic vector,
+# sparse = BM25 lexical vector (jieba-presegmented). Hybrid search fuses
+# both via RRF, then the caller reranks the fused candidates.
+DENSE_VECTOR_NAME = "dense"
+SPARSE_VECTOR_NAME = "sparse"
+
+# RRF fusion tuning, applied in QdrantStorage.query_points. k is the rank
+# dampening constant from the RRF paper (smaller k favors top ranks more);
+# weights balance the two retrieval paths — [dense, sparse] order.
+RRF_K = 2
+RRF_WEIGHTS = [1.0, 1.0]
 
 
 class QdrantStorage:
@@ -29,11 +34,15 @@ class QdrantStorage:
         crew: Any = None,
         qdrant_location: str | None = None,
         qdrant_api_key: str | None = None,
+        sparse_embedder: Any | None = None,
+        reranker: Any | None = None,
     ):
         self.type = type
         # The project passes config.embedder_config, a dict with the callable
         # EmbeddingFunction under the "provider" key (see config.py).
         self.embedder_config = embedder_config["provider"]
+        self.sparse_embedder = sparse_embedder
+        self.reranker = reranker
         self._qdrant_location = qdrant_location
         self._qdrant_api_key = qdrant_api_key
         self.app: QdrantClient | None = None
@@ -44,23 +53,51 @@ class QdrantStorage:
         query: str,
         limit: int = 3,
         filter: dict | None = None,
-        score_threshold: float | None = None,
     ) -> list[dict]:
-        # Limit the text length to avoid the document being too large for the model
+        # Hybrid retrieval: two parallel prefetch paths (dense + sparse)
+        # fused by RRF, then a cross-encoder rerank of the fused candidates.
+        # No score threshold — RRF scores are rank-based, not cosine
+        # similarities, so a threshold tuned for dense scores is meaningless.
         query = self._normalize_text(query)
+        query_filter = self._to_qdrant_filter(filter)
 
-        if score_threshold is None:
-            score_threshold = DEFAULT_SCORE_THRESHOLD
+        # Reranking happens on `rerank_limit` candidates, then top `limit` win.
+        rerank_limit = max(limit * 4, 20) if self.reranker else limit
 
-        # Embed the text and search for similar points
-        embedding = self.embedder_config([query])[0]
-        response = self.app.query_points(
-            self.type,
-            query=embedding,
-            query_filter=self._to_qdrant_filter(filter),
-            limit=limit,
-            score_threshold=score_threshold,
-        )
+        if self.sparse_embedder is not None:
+            dense = self.embedder_config([query])[0]
+            sparse = self.sparse_embedder.embed([query])[0]
+            response = self.app.query_points(
+                self.type,
+                prefetch=[
+                    models.Prefetch(
+                        query=dense,
+                        using=DENSE_VECTOR_NAME,
+                        filter=query_filter,
+                        limit=rerank_limit,
+                    ),
+                    models.Prefetch(
+                        query=models.SparseVector(
+                            indices=sparse.indices.tolist(),
+                            values=sparse.values.tolist(),
+                        ),
+                        using=SPARSE_VECTOR_NAME,
+                        filter=query_filter,
+                        limit=rerank_limit,
+                    ),
+                ],
+                query=models.FusionQuery(fusion=models.Fusion.RRF),
+                limit=rerank_limit,
+            )
+        else:
+            embedding = self.embedder_config([query])[0]
+            response = self.app.query_points(
+                self.type,
+                query=embedding,
+                using=DENSE_VECTOR_NAME,
+                query_filter=query_filter,
+                limit=rerank_limit,
+            )
         results = [
             {
                 "id": point.id,
@@ -71,7 +108,14 @@ class QdrantStorage:
             for point in response.points
         ]
 
-        return results
+        if self.reranker and len(results) > 1:
+            scores = self.reranker.rerank(query, [r["context"] for r in results])
+            for result, score in zip(results, scores, strict=True):
+                result["rrf_score"] = result["score"]
+                result["score"] = score
+            results.sort(key=lambda r: r["score"], reverse=True)
+
+        return results[:limit]
 
     def reset(self) -> None:
         self.app.delete_collection(self.type)
@@ -95,6 +139,16 @@ class QdrantStorage:
 
         # Embed all the texts at once
         embeddings = self.embedder_config(values)
+        vectors: list[dict[str, Any]] = [
+            {DENSE_VECTOR_NAME: embedding} for embedding in embeddings
+        ]
+        if self.sparse_embedder is not None:
+            sparse = self.sparse_embedder.embed(values)
+            for vector, embedding in zip(vectors, sparse, strict=True):
+                vector[SPARSE_VECTOR_NAME] = models.SparseVector(
+                    indices=embedding.indices.tolist(),
+                    values=embedding.values.tolist(),
+                )
 
         # Upsert all the points in a single request
         self.app.upsert(
@@ -102,10 +156,10 @@ class QdrantStorage:
             points=[
                 models.PointStruct(
                     id=uuid.uuid4().hex,
-                    vector=embedding,
+                    vector=vector,
                     payload={"value": value, "metadata": metadata},
                 )
-                for embedding, value, metadata in zip(embeddings, values, metadatas, strict=True)
+                for vector, value, metadata in zip(vectors, values, metadatas, strict=True)
             ],
         )
 
@@ -170,13 +224,32 @@ class QdrantStorage:
             # Create an embedding for a dummy value to get the embedding dimensionality
             embedding = self.embedder_config([self.TEST_STRING])[0]
 
-            # Create Qdrant collection with the embedding dimensionality
+            vectors_config: models.VectorsConfig = models.VectorParams(
+                size=len(embedding),
+                distance=models.Distance.COSINE,
+            )
+            sparse_vectors_config = None
+            if self.sparse_embedder is not None:
+                vectors_config = {
+                    DENSE_VECTOR_NAME: models.VectorParams(
+                        size=len(embedding),
+                        distance=models.Distance.COSINE,
+                    )
+                }
+                # IDF modifier downweights high-frequency terms, improving BM25
+                # discrimination on Chinese text.
+                sparse_vectors_config = {
+                    SPARSE_VECTOR_NAME: models.SparseVectorParams(
+                        index=models.SparseIndexParams(),
+                        modifier=models.Modifier.IDF,
+                    )
+                }
+
+            # Create Qdrant collection with dense (and optionally sparse) vectors
             client.create_collection(
                 collection_name=self.type,
-                vectors_config=models.VectorParams(
-                    size=len(embedding),
-                    distance=models.Distance.COSINE,
-                ),
+                vectors_config=vectors_config,
+                sparse_vectors_config=sparse_vectors_config,
             )
 
             # Create payload indexes for the fields used in filters
@@ -187,6 +260,17 @@ class QdrantStorage:
                     field_schema=models.KeywordIndexParams(
                         type=models.KeywordIndexType.KEYWORD
                     ),
+                )
+        elif self.sparse_embedder is not None:
+            # Guard against pre-hybrid collections: upserting hybrid points
+            # into a dense-only collection fails server-side with a confusing
+            # error, so fail fast with an actionable message instead.
+            existing = client.get_collection(self.type).config.params.sparse_vectors
+            if SPARSE_VECTOR_NAME not in (existing or {}):
+                raise RuntimeError(
+                    f"Collection '{self.type}' predates hybrid search (no sparse "
+                    f"'{SPARSE_VECTOR_NAME}' vector). Delete it and restart to "
+                    "re-ingest the vault with dense+sparse vectors."
                 )
         self.app = client
 

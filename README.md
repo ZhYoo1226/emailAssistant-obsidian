@@ -63,12 +63,15 @@ Two independent loops run side by side:
 ## Tech stack
 
 - [CrewAI](https://www.crewai.com/) `1.15` — agent orchestration
-- [Qdrant](https://qdrant.tech/) — vector store / knowledge base
-- [fastembed](https://github.com/qdrant/fastembed) — local ONNX embeddings (`BAAI/bge-small-en-v1.5`)
+- [Qdrant](https://qdrant.tech/) — vector store / knowledge base, **hybrid search** (dense + sparse vectors fused by RRF, then cross-encoder rerank)
+- [fastembed](https://github.com/qdrant/fastembed) — local ONNX embeddings: `BAAI/bge-small-en-v1.5` (dense) + `Qdrant/bm25` over jieba tokens (sparse) + `BAAI/bge-reranker-base` (rerank)
+- [jieba](https://github.com/fxsjy/jieba) — Chinese word segmentation feeding the BM25 sparse path
 - An **OpenAI-compatible gateway** serving DeepSeek models (all LLM calls)
 - Gmail API (OAuth 2.0)
 
-No GPU required. LLM inference goes through the gateway API; embeddings run locally on CPU.
+No GPU required. LLM inference goes through the gateway API; embeddings, sparse vectors and reranking run locally on CPU.
+
+> **Upgrading from the pre-hybrid version?** The collection schema changed (a named `sparse` vector was added). Delete the existing `knowledge-base` collection and restart — the vault is re-ingested automatically.
 
 ---
 
