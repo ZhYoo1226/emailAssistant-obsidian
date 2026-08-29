@@ -2,7 +2,9 @@ import hashlib
 import logging
 import os
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 import yaml
 from watchdog.events import (
@@ -14,6 +16,7 @@ from watchdog.events import (
     FileDeletedEvent,
     FileModifiedEvent,
     FileMovedEvent,
+    FileSystemEvent,
     FileSystemEventHandler,
 )
 
@@ -31,6 +34,38 @@ MODIFY_DEBOUNCE_SEC = 2.0
 # Retry reads a few times before giving up.
 FILE_READ_ATTEMPTS = 5
 FILE_READ_RETRY_DELAY_SEC = 0.5
+
+_T = TypeVar("_T")
+
+
+def _read_with_retry(read: Callable[[Path], _T], path: Path) -> _T:
+    """
+    Run a file read, retrying briefly when the file is locked by the
+    writer (Windows raises PermissionError mid-write).
+    """
+    for attempt in range(1, FILE_READ_ATTEMPTS + 1):
+        try:
+            return read(path)
+        except PermissionError:
+            if attempt == FILE_READ_ATTEMPTS:
+                raise
+            logger.warning(
+                "File locked (%s), retry %d/%d in %.1fs...",
+                path, attempt, FILE_READ_ATTEMPTS, FILE_READ_RETRY_DELAY_SEC,
+            )
+            time.sleep(FILE_READ_RETRY_DELAY_SEC)
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _file_md_path(event: FileSystemEvent) -> str | None:
+    """
+    Path of a Markdown file event, or None for directory / non-Markdown
+    events. Shared guard for all on_* handlers — directories produce
+    per-file events of their own, and only .md files are knowledge.
+    """
+    if event.is_directory or not str(event.src_path).endswith(".md"):
+        return None
+    return os.fsdecode(event.src_path)
 
 
 class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
@@ -100,43 +135,22 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
 
     @staticmethod
     def _read_bytes_with_retry(path: Path) -> bytes:
-        """
-        Read the raw file bytes, retrying briefly when the file is locked by
-        the writer (Windows raises PermissionError mid-write).
-        """
-        for attempt in range(1, FILE_READ_ATTEMPTS + 1):
-            try:
-                return path.read_bytes()
-            except PermissionError:
-                if attempt == FILE_READ_ATTEMPTS:
-                    raise
-                logger.warning(
-                    "File locked (%s), retry %d/%d in %.1fs...",
-                    path, attempt, FILE_READ_ATTEMPTS, FILE_READ_RETRY_DELAY_SEC,
-                )
-                time.sleep(FILE_READ_RETRY_DELAY_SEC)
-        raise AssertionError("unreachable")  # pragma: no cover
+        """Read the raw file bytes, retrying briefly on writer locks."""
+        return _read_with_retry(Path.read_bytes, path)
 
     @classmethod
     def _file_hash(cls, path: Path) -> str:
         """Return the SHA-256 hash of the file's raw bytes."""
         return hashlib.sha256(cls._read_bytes_with_retry(path)).hexdigest()
 
-    @classmethod
-    def _read_text_with_retry(cls, path: Path) -> str:
+    @staticmethod
+    def _read_text_with_retry(path: Path) -> str:
         """Read the file text (UTF-8 with BOM tolerance), retrying on locks."""
-        for attempt in range(1, FILE_READ_ATTEMPTS + 1):
-            try:
-                return path.read_text(encoding="utf-8-sig", errors="replace")
-            except PermissionError:
-                if attempt == FILE_READ_ATTEMPTS:
-                    raise
-                logger.warning(
-                    "File locked (%s), retry %d/%d in %.1fs...",
-                    path, attempt, FILE_READ_ATTEMPTS, FILE_READ_RETRY_DELAY_SEC,
-                )
-                time.sleep(FILE_READ_RETRY_DELAY_SEC)
-        raise AssertionError("unreachable")  # pragma: no cover
+
+        def _read(p: Path) -> str:
+            return p.read_text(encoding="utf-8-sig", errors="replace")
+
+        return _read_with_retry(_read, path)
 
     def initialize(self, init_path: Path):
         """
@@ -191,12 +205,8 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         :param event:
         :return:
         """
-        if isinstance(event, DirCreatedEvent):
-            return
-        src_path = os.fsdecode(event.src_path)
-
-        # Verify if the file is really a Markdown file
-        if not src_path.endswith(".md"):
+        src_path = _file_md_path(event)
+        if src_path is None:
             return
 
         # Skip files outside the configured vault folders (includes
@@ -311,12 +321,8 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         :param event:
         :return:
         """
-        if isinstance(event, DirDeletedEvent):
-            return
-        src_path = os.fsdecode(event.src_path)
-
-        # Verify if the file is really a Markdown file
-        if not src_path.endswith(".md"):
+        src_path = _file_md_path(event)
+        if src_path is None:
             return
 
         # Log the event
@@ -334,12 +340,8 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         :param event:
         :return:
         """
-        if isinstance(event, DirModifiedEvent):
-            return
-        src_path = os.fsdecode(event.src_path)
-
-        # Verify if the file is really a Markdown file
-        if not src_path.endswith(".md"):
+        src_path = _file_md_path(event)
+        if src_path is None:
             return
 
         # Debounce: editors and sync tools fire multiple modified events for
@@ -371,12 +373,8 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         :param event:
         :return:
         """
-        if isinstance(event, DirMovedEvent):
-            return
-        src_path = os.fsdecode(event.src_path)
-
-        # Verify if the file is really a Markdown file
-        if not src_path.endswith(".md"):
+        src_path = _file_md_path(event)
+        if src_path is None:
             return
 
         # Log the event
