@@ -266,7 +266,11 @@ class QdrantStorage:
             )
 
             # Create payload indexes for the fields used in filters
-            for field in ("metadata.src_path", "metadata.content_hash"):
+            for field in (
+                "metadata.src_path",
+                "metadata.content_hash",
+                "metadata.folder",
+            ):
                 client.create_payload_index(
                     collection_name=self.type,
                     field_name=field,

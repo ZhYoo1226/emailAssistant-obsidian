@@ -119,6 +119,20 @@ qdrant_collection_name = "obsidian-notes"
 # Obsidian configuration
 obsidian_vault_path = os.environ.get("OBSIDIAN_VAULT_PATH")
 
+
+def _parse_folder_list(raw: str | None) -> list[str]:
+    return [name.strip() for name in (raw or "").split(",") if name.strip()]
+
+
+# Restrict ingestion by top-level vault folder (comma-separated names). Empty
+# include list = every folder; exclude then removes from that set.
+obsidian_include_folders = _parse_folder_list(
+    os.environ.get("OBSIDIAN_INCLUDE_FOLDERS")
+)
+obsidian_exclude_folders = _parse_folder_list(
+    os.environ.get("OBSIDIAN_EXCLUDE_FOLDERS")
+)
+
 # AgentOps configuration
 agentops_api_key = os.environ.get("AGENTOPS_API_KEY") or None
 

@@ -47,6 +47,9 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         qdrant_api_key: str | None = None,
         min_content_length: int = 10,
         sparse_embedder=None,
+        vault_root: Path | None = None,
+        include_folders: list[str] | None = None,
+        exclude_folders: list[str] | None = None,
     ):
         # CrewBase's TYPE_CHECKING stub types __init__ as (*args, **kwargs),
         # hiding the real BaseCrew positional signature from pyright.
@@ -59,7 +62,39 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         self.crew = crew.crew()
         self.knowledge_base = crew.knowledge_base()  # pyright: ignore[reportAttributeAccessIssue]
         self.min_content_length = min_content_length
+        self._vault_root = vault_root
+        self._include_folders = set(include_folders or [])
+        self._exclude_folders = set(exclude_folders or [])
         self._last_modified_at: dict[str, float] = {}
+
+    def _top_level_folder(self, src_path: str) -> str | None:
+        """
+        Name of the top-level vault folder containing the file, or None for
+        files directly in the vault root. The vault is expected to use a single
+        level of folders (deeper nesting is not distinguished).
+        """
+        if self._vault_root is None:
+            return None
+        try:
+            relative = Path(src_path).relative_to(self._vault_root)
+        except ValueError:
+            return None
+        parts = relative.parts
+        return parts[0] if len(parts) > 1 else None
+
+    def _in_scope(self, src_path: str) -> bool:
+        """
+        Whether a file belongs to a folder selected for ingestion. Files
+        directly in the vault root are always in scope.
+        """
+        folder = self._top_level_folder(src_path)
+        if folder is None:
+            return True
+        if folder in self._exclude_folders:
+            return False
+        if self._include_folders and folder not in self._include_folders:
+            return False
+        return True
 
     @staticmethod
     def _read_bytes_with_retry(path: Path) -> bytes:
@@ -105,10 +140,14 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         """
         Initialize the Qdrant collection with existing files.
         """
-        self._cleanup_orphans(init_path)
+        vault_md_files = [p for p in Path(init_path).rglob("*.md")]
+        self._cleanup_orphans(vault_md_files)
 
-        for file_path in Path(init_path).rglob("*.md"):
+        for file_path in vault_md_files:
             file_path_str = str(file_path)
+            if not self._in_scope(file_path_str):
+                logger.info("Out of configured folders, skipping: %s", file_path)
+                continue
             file_hash = self._file_hash(file_path)
             # Count chunks stored for this exact content hash. Comparing the
             # count against total_chunks (rather than > 0) detects partially
@@ -131,15 +170,16 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
                 FileCreatedEvent(file_path_str, file_path_str, is_synthetic=True)
             )
 
-    def _cleanup_orphans(self, init_path: Path):
+    def _cleanup_orphans(self, vault_md_files: list[Path]):
         """
-        Remove points whose src_path no longer exists in the vault, so that
-        deleting a note in Obsidian while the app is stopped is reflected on
-        the next start.
+        Remove points whose src_path no longer exists in the vault or falls
+        outside the configured folders, so deletions and scope changes made
+        while the app is stopped are reflected on the next start.
         """
-        indexed_paths = self.knowledge_base.list_src_paths()
-        vault_paths = {str(p) for p in Path(init_path).rglob("*.md")}
-        for path in indexed_paths - vault_paths:
+        vault_paths = {
+            str(p) for p in vault_md_files if self._in_scope(str(p))
+        }
+        for path in self.knowledge_base.list_src_paths() - vault_paths:
             logger.info("Removing orphaned entries for deleted file: %s", path)
             self.knowledge_base.delete({"src_path": path})
 
@@ -159,6 +199,11 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
 
         # Skip files inside Obsidian's trash folder (deleted notes).
         if "/.trash/" in src_path:
+            return
+
+        # Skip files outside the configured vault folders.
+        if not self._in_scope(src_path):
+            logger.info("Out of configured folders, skipping: %s", src_path)
             return
 
         # Log the event
@@ -239,6 +284,7 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         self.knowledge_base.delete({"src_path": src_path})
         document_chunks: models.ContextualizedChunks = pydantic_output
         total_chunks = len(document_chunks.chunks)
+        folder = self._top_level_folder(src_path)
         batch: list[tuple[str, dict]] = []
         for chunk in document_chunks.chunks:
             formatted_input_data = f"{chunk.content}\n\n{chunk.context}"
@@ -248,6 +294,7 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
                 "total_chunks": total_chunks,
                 "chunk_context": chunk.context,
                 "chunk_content": chunk.content,
+                **({"folder": folder} if folder else {}),
                 **frontmatter,
             }
             batch.append((formatted_input_data, metadata))

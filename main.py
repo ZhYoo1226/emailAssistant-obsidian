@@ -49,6 +49,9 @@ def create_filesystem_listener() -> Any:
         config.qdrant_location,
         config.qdrant_api_key,
         sparse_embedder=config.sparse_embedder,
+        vault_root=Path(obsidian_vault_path),
+        include_folders=config.obsidian_include_folders,
+        exclude_folders=config.obsidian_exclude_folders,
     )
 
     # Initialize the Qdrant collection with existing files

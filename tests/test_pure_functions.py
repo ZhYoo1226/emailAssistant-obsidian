@@ -8,7 +8,25 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from email_assistant import models  # noqa: E402
 from email_assistant.gmail.handlers import AgenticAutoReplyHandler  # noqa: E402
 from email_assistant.gmail.inbox import GmailInboxState  # noqa: E402
+from email_assistant.obsidian.handlers import (  # noqa: E402
+    AgenticObsidianVaultToQdrantHandler,
+)
 from email_assistant.storage import QdrantStorage  # noqa: E402
+
+
+def _folder_handler(
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+) -> AgenticObsidianVaultToQdrantHandler:
+    # Bypass __init__ (which builds a crew + Qdrant client); the folder logic
+    # only needs the three attributes set below.
+    handler = AgenticObsidianVaultToQdrantHandler.__new__(
+        AgenticObsidianVaultToQdrantHandler
+    )
+    handler._vault_root = Path("D:/vault")
+    handler._include_folders = set(include or [])
+    handler._exclude_folders = set(exclude or [])
+    return handler
 
 
 class TestStripCitationMarkers:
@@ -117,3 +135,50 @@ class TestEmailResponseModel:
         schema = json.dumps(models.EmailResponse.model_json_schema())
         assert "来源" not in schema
         assert "citation markers" not in schema or "without" in schema
+
+
+class TestTopLevelFolder:
+    def test_file_in_folder(self):
+        handler = _folder_handler()
+        assert handler._top_level_folder("D:/vault/实习经历/abc.md") == "实习经历"
+
+    def test_file_at_vault_root(self):
+        handler = _folder_handler()
+        assert handler._top_level_folder("D:/vault/README.md") is None
+
+    def test_file_outside_vault(self):
+        handler = _folder_handler()
+        assert handler._top_level_folder("E:/other/abc.md") is None
+
+    def test_no_vault_root_configured(self):
+        handler = _folder_handler()
+        handler._vault_root = None
+        assert handler._top_level_folder("D:/vault/实习经历/abc.md") is None
+
+    def test_windows_separator_path(self):
+        handler = _folder_handler()
+        assert handler._top_level_folder("D:\\vault\\学习情况\\a.md") == "学习情况"
+
+
+class TestInScope:
+    def test_root_files_always_in_scope(self):
+        handler = _folder_handler(include=["实习经历"])
+        assert handler._in_scope("D:/vault/README.md") is True
+
+    def test_include_list_restricts(self):
+        handler = _folder_handler(include=["实习经历", "个人资料"])
+        assert handler._in_scope("D:/vault/实习经历/a.md") is True
+        assert handler._in_scope("D:/vault/学习情况/a.md") is False
+
+    def test_exclude_list_removes(self):
+        handler = _folder_handler(exclude=["日记"])
+        assert handler._in_scope("D:/vault/日记/a.md") is False
+        assert handler._in_scope("D:/vault/实习经历/a.md") is True
+
+    def test_exclude_wins_over_include(self):
+        handler = _folder_handler(include=["实习经历"], exclude=["实习经历"])
+        assert handler._in_scope("D:/vault/实习经历/a.md") is False
+
+    def test_empty_config_accepts_all(self):
+        handler = _folder_handler()
+        assert handler._in_scope("D:/vault/任意文件夹/a.md") is True
