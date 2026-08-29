@@ -9,7 +9,7 @@ from watchdog.observers import Observer
 # like © that crash print() with UnicodeEncodeError. Force UTF-8 with
 # replacement so a log line can never kill an email processing run.
 for _stream in (sys.stdout, sys.stderr):
-    _stream.reconfigure(encoding="utf-8", errors="replace")
+    _stream.reconfigure(encoding="utf-8", errors="replace")  # pyright: ignore[reportAttributeAccessIssue]
 
 import config
 from email_assistant.gmail.handlers import AgenticAutoReplyHandler
@@ -19,7 +19,7 @@ from email_assistant.obsidian.handlers import AgenticObsidianVaultToQdrantHandle
 # Optional: Initialize AgentOps if the API key is provided. crewai>=1.15 no
 # longer ships the agentops extra, so the package itself is optional too.
 try:
-    import agentops
+    import agentops  # pyright: ignore[reportMissingImports]
 except ImportError:
     agentops = None
 
@@ -39,7 +39,9 @@ def create_filesystem_listener() -> Any:
     """
     Watch any changes done in the Obsidian vault and load them into the knowledge base.
     """
-    logger.info("Watching for filesystem changes at %s", config.obsidian_vault_path)
+    obsidian_vault_path = config.obsidian_vault_path
+    assert obsidian_vault_path is not None, "OBSIDIAN_VAULT_PATH must be set"
+    logger.info("Watching for filesystem changes at %s", obsidian_vault_path)
 
     # Handler's methods are going to be called when a file is created, modified, or deleted
     event_handler = AgenticObsidianVaultToQdrantHandler(
@@ -50,11 +52,11 @@ def create_filesystem_listener() -> Any:
     )
 
     # Initialize the Qdrant collection with existing files
-    event_handler.initialize(config.obsidian_vault_path)
+    event_handler.initialize(Path(obsidian_vault_path))
 
     # Observer listens for filesystem events
     listener = Observer()
-    listener.schedule(event_handler, config.obsidian_vault_path, recursive=True)
+    listener.schedule(event_handler, obsidian_vault_path, recursive=True)
     return listener
 
 

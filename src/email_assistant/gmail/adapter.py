@@ -6,6 +6,7 @@ from collections.abc import Generator
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
+from typing import Any
 
 import google_auth_httplib2
 from bs4 import BeautifulSoup
@@ -86,10 +87,14 @@ class GmailServiceAdapter:
             flow = InstalledAppFlow.from_client_secrets_file(
                 str(credentials_file), self.GOOGLE_API_SCOPES
             )
-            self._credentials = flow.run_local_server(port=0)
+            # The stub types run_local_server as a union with
+            # external_account_authorized_user.Credentials, but an
+            # InstalledAppFlow always returns oauth2 Credentials.
+            self._credentials = flow.run_local_server(port=0)  # pyright: ignore[reportAttributeAccessIssue]
         else:
             self._credentials.refresh(Request())
 
+        assert self._credentials is not None
         # Save the _credentials for the next run
         with open(token_file, "w") as fp:
             fp.write(self._credentials.to_json())
@@ -105,7 +110,7 @@ class GmailServiceAdapter:
 
             parsed = urlparse(proxy_url if "//" in proxy_url else f"http://{proxy_url}")
             pi = httplib2.ProxyInfo(
-                proxy_type=httplib2.socks.PROXY_TYPE_HTTP,
+                proxy_type=httplib2.socks.PROXY_TYPE_HTTP,  # pyright: ignore[reportAttributeAccessIssue]
                 proxy_host=parsed.hostname,
                 proxy_port=parsed.port or 8080,
             )
@@ -120,6 +125,14 @@ class GmailServiceAdapter:
             self._service = build(
                 "gmail", "v1", credentials=self._credentials, cache_discovery=False
             )
+
+    def _gmail(self) -> Any:
+        """
+        The Gmail users() resource. googleapiclient's Resource is dynamically
+        generated — .users() doesn't exist in the stubs — so callers get Any.
+        """
+        assert self._service is not None
+        return self._service.users()  # pyright: ignore[reportAttributeAccessIssue]
 
     def _execute_with_retry(self, request):
         """
@@ -151,7 +164,7 @@ class GmailServiceAdapter:
         while True:
             def _fetch_page(token=page_token):
                 return (
-                    self._service.users()
+                    self._gmail()
                     .threads()
                     .list(userId="me", q="is:unread", pageToken=token)
                     .execute()
@@ -178,7 +191,7 @@ class GmailServiceAdapter:
         while True:
             try:
                 response = (
-                    self._service.users()
+                    self._gmail()
                     .history()
                     .list(
                         userId="me",
@@ -230,7 +243,7 @@ class GmailServiceAdapter:
         """
         messages = self._execute_with_retry(
             lambda: (
-                self._service.users()
+                self._gmail()
                 .messages()
                 .list(userId="me", maxResults=1)
                 .execute()
@@ -241,7 +254,7 @@ class GmailServiceAdapter:
         message_id = messages["messages"][0]["id"]
         last_message = self._execute_with_retry(
             lambda: (
-                self._service.users()
+                self._gmail()
                 .messages()
                 .get(userId="me", id=message_id)
                 .execute()
@@ -257,7 +270,7 @@ class GmailServiceAdapter:
         """
         full_thread = self._execute_with_retry(
             lambda: (
-                self._service.users()
+                self._gmail()
                 .threads()
                 .get(userId="me", id=thread_id, format="full")
                 .execute()
@@ -273,7 +286,7 @@ class GmailServiceAdapter:
         """
         full_message = self._execute_with_retry(
             lambda: (
-                self._service.users()
+                self._gmail()
                 .messages()
                 .get(userId="me", id=message_id, format="full")
                 .execute()
@@ -357,7 +370,7 @@ class GmailServiceAdapter:
         for attempt in range(3):
             try:
                 sent = (
-                    self._service.users()
+                    self._gmail()
                     .messages()
                     .send(userId="me", body={"raw": raw})
                     .execute()
@@ -389,6 +402,7 @@ class GmailServiceAdapter:
                     attempt + 1, e, delay,
                 )
                 time.sleep(delay)
+        assert last_error is not None
         raise last_error
 
     def _thread_already_answered(self, thread: models.Thread, message_id: str) -> bool:
@@ -411,6 +425,10 @@ class GmailServiceAdapter:
         :param message:
         :return:
         """
+        payload = message.payload
+        if payload is None:
+            raise ValueError("Message has no payload.")
+
         content: str | None = None
         charset: str = self.DEFAULT_CHARSET
         for mime_type in self.CONTENT_TYPE_PREFERRED:
@@ -419,16 +437,16 @@ class GmailServiceAdapter:
 
             # If the body has data, use it
             if (
-                message.payload.mime_type.lower() == mime_type
-                and message.payload.body.data
+                payload.mime_type.lower() == mime_type
+                and payload.body.data
             ):
-                content = message.payload.body.data
-                charset = self._extract_content_charset(message.payload)
+                content = payload.body.data
+                charset = self._extract_content_charset(payload)
                 logger.debug(f"Found {mime_type} body with charset {charset}")
                 break
 
             # Some messages have no parts, so we need to check if the parts exist
-            if not message.payload.parts:
+            if not payload.parts:
                 continue
 
             # If the body has no data, check the parts, but first flatten the list of parts
@@ -485,6 +503,8 @@ class GmailServiceAdapter:
         :param message:
         :return:
         """
+        if message.payload is None:
+            return []
         parts = [message.payload]
         for part in message.payload.parts or []:
             parts.extend(self._flatten_parts(part))
@@ -501,16 +521,16 @@ class GmailServiceAdapter:
             parts.extend(self._flatten_parts(inner_part))
         return parts
 
-    def _extract_content_charset(self, message: models.Message) -> str:
+    def _extract_content_charset(self, part: models.MessagePart) -> str:
         """
         Extract the charset from the Content-Type header.
-        :param message:
+        :param part:
         :return:
         """
         content_type_header = next(
             (
                 header
-                for header in message.headers
+                for header in part.headers
                 if header.name.lower() == "content-type"
             ),
             None,

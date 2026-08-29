@@ -62,13 +62,17 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
         sparse_embedder=None,
         reranker=None,
     ):
+        # CrewBase's TYPE_CHECKING stub hides the real BaseCrew signature
+        # from pyright (see obsidian/handlers.py for details).
         crew_builder = AutoResponderCrew(
-            embedder_config, qdrant_location, qdrant_api_key,
+            embedder_config,  # pyright: ignore[reportCallIssue]
+            qdrant_location,
+            qdrant_api_key,
             sparse_embedder=sparse_embedder,
             reranker=reranker,
         )
         self.crew = crew_builder.crew()
-        self.knowledge_base = crew_builder.knowledge_base()
+        self.knowledge_base = crew_builder.knowledge_base()  # pyright: ignore[reportAttributeAccessIssue]
 
     def on_message_added(self, event: events.MessageAddedEvent):
         """
@@ -82,14 +86,15 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
         # Load the full thread
         thread = service.load_full_thread(message.thread_id)
         last_message = thread.messages[-1]
+        last_labels = last_message.label_ids or []
 
         # We only want to process unread messages, so we skip the read ones
-        if "UNREAD" not in last_message.label_ids:
+        if "UNREAD" not in last_labels:
             logger.info("The last message is already read. Skipping the reply.")
             return
 
         # If the last message is already a draft, then do not make a reply
-        if "DRAFT" in last_message.label_ids:
+        if "DRAFT" in last_labels:
             logger.info("The last message is already a draft. Skipping the reply.")
             return
 
@@ -98,7 +103,7 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
         # the categorizer (which would otherwise misfile the thread as spam).
         non_draft_messages = [
             message for message in thread.messages
-            if "DRAFT" not in message.label_ids
+            if "DRAFT" not in (message.label_ids or [])
         ]
         decoded_messages = [
             service.decode_message(message) for message in non_draft_messages
@@ -109,15 +114,16 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
 
         # Call the crew to generate a response
         response = self.crew.kickoff(inputs={"messages": md_messages})
-        logger.info("Generated response: %s", response.pydantic)
-        if not isinstance(response.pydantic, models.EmailResponse):
+        pydantic_output = getattr(response, "pydantic", None)
+        logger.info("Generated response: %s", pydantic_output)
+        if not isinstance(pydantic_output, models.EmailResponse):
             logger.info(
-                "Crew decided not to respond to the message: %s", response.pydantic
+                "Crew decided not to respond to the message: %s", pydantic_output
             )
             return
 
         # Create a draft with the generated response
-        email_response = response.pydantic
+        email_response = pydantic_output
         if email_response.content is None:
             logger.info("The response is empty. Skipping the reply.")
             return
@@ -149,7 +155,8 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
             return
 
         service.send_message(
-            thread, content=self._strip_citation_markers(email_response.content)
+            thread,
+            content=self._strip_citation_markers(email_response.content) or "",
         )
 
     @staticmethod
@@ -201,12 +208,14 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
             "Question: is every factual statement in the reply supported by the cited "
             "sources? Answer with only YES or NO."
         )
+        # litellm's stubs type the sync return as CustomStreamWrapper; the
+        # actual non-streaming response carries .choices.
         response = completion(
             model=f"openai/{GATEWAY_FAST_MODEL}",
             messages=[{"role": "user", "content": prompt}],
             timeout=FAITHFULNESS_TIMEOUT_SEC,
         )
-        verdict = (response.choices[0].message.content or "").strip().upper()
+        verdict = (response.choices[0].message.content or "").strip().upper()  # pyright: ignore[reportAttributeAccessIssue]
         logger.info("Faithfulness verdict: %s", verdict)
         return verdict.startswith("YES")
 

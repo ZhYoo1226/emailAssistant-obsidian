@@ -161,6 +161,7 @@ class GmailInboxListener(BaseThread):
             # from the Google Gmail service and sta`rt processing from here
             if self._state.last_history_id is None:
                 current_max_history_id = self._service.load_max_history_id()
+                assert current_max_history_id is not None
                 self._state.update_last_history_id(current_max_history_id)
 
             # Log the state before starting the loop over the history
@@ -168,6 +169,7 @@ class GmailInboxListener(BaseThread):
 
             # Get the history starting from the last known history ID
             counter = -1
+            assert self._state.last_history_id is not None
             try:
                 history_generator = self._service.iter_history(
                     self._state.last_history_id

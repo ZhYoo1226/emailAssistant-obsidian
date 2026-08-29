@@ -40,6 +40,7 @@ class QdrantStorage:
         self.type = type
         # The project passes config.embedder_config, a dict with the callable
         # EmbeddingFunction under the "provider" key (see config.py).
+        assert embedder_config is not None
         self.embedder_config = embedder_config["provider"]
         self.sparse_embedder = sparse_embedder
         self.reranker = reranker
@@ -165,9 +166,22 @@ class QdrantStorage:
         )
 
     def delete(self, filter: dict | None = None) -> None:
+        if filter is None:
+            self.app.delete_collection(self.type)
+            return
         self.app.delete(
             self.type,
-            points_selector=self._to_qdrant_filter(filter),
+            points_selector=models.FilterSelector(
+                filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key=f"metadata.{key}",
+                            match=models.MatchValue(value=value),
+                        )
+                        for key, value in filter.items()
+                    ]
+                ),
+            ),
         )
 
     def count(self, filter: dict | None = None) -> int:
@@ -191,7 +205,7 @@ class QdrantStorage:
         )
         if not points:
             return None
-        metadata = points[0].payload.get("metadata") or {}
+        metadata = (points[0].payload or {}).get("metadata") or {}
         return metadata.get(key)
 
     def list_src_paths(self) -> set[str]:
@@ -210,7 +224,7 @@ class QdrantStorage:
                 with_vectors=False,
             )
             for point in points:
-                metadata = point.payload.get("metadata") or {}
+                metadata = (point.payload or {}).get("metadata") or {}
                 src_path = metadata.get("src_path")
                 if src_path:
                     paths.add(src_path)

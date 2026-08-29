@@ -80,10 +80,15 @@ class KnowledgeOrganizingCrew(BaseCrew):
     agents_config = "config/knowledge/agents.yaml"
     tasks_config = "config/knowledge/tasks.yaml"
 
+    # CrewBase's metaclass rewrites these class attrs at runtime: the configs
+    # become dicts loaded from YAML and agents/tasks are injected by the
+    # decorators. The stubs type them as lists, so string lookups below need
+    # per-line ignores.
+
     @agent
     def chunks_extractor(self) -> Agent:
         return Agent(
-            config=self.agents_config["chunks_extractor"],
+            config=self.agents_config["chunks_extractor"],  # pyright: ignore[reportArgumentType]
             verbose=True,
             llm=_gateway_llm(GATEWAY_FAST_MODEL),
         )
@@ -91,15 +96,15 @@ class KnowledgeOrganizingCrew(BaseCrew):
     @agent
     def contextualizer(self) -> Agent:
         return Agent(
-            config=self.agents_config["contextualizer"],
+            config=self.agents_config["contextualizer"],  # pyright: ignore[reportArgumentType]
             verbose=True,
             llm=_gateway_llm(GATEWAY_FAST_MODEL),
         )
 
     @task
     def extract_chunks(self) -> Task:
-        return Task(
-            config=self.tasks_config["extract_chunks"],
+        return Task(  # pyright: ignore[reportCallIssue]
+            config=self.tasks_config["extract_chunks"],  # pyright: ignore[reportArgumentType]
             output_pydantic=models.Chunks,
         )
 
@@ -107,8 +112,8 @@ class KnowledgeOrganizingCrew(BaseCrew):
     def contextualize_chunks(self) -> Task:
         # The task description is borrowed from the Anthropic Contextual Retrieval
         # See: https://www.anthropic.com/news/contextual-retrieval/
-        return Task(
-            config=self.tasks_config["contextualize_chunks"],
+        return Task(  # pyright: ignore[reportCallIssue]
+            config=self.tasks_config["contextualize_chunks"],  # pyright: ignore[reportArgumentType]
             output_pydantic=models.ContextualizedChunks,
         )
 
@@ -118,8 +123,8 @@ class KnowledgeOrganizingCrew(BaseCrew):
         # memory=False, so the embedder would never be used; passing the raw
         # dict also fails crewai 1.15's stricter EmbedderConfig validation.
         return Crew(
-            agents=self.agents,  # Automatically created by the @agent decorator
-            tasks=self.tasks,  # Automatically created by the @task decorator
+            agents=self.agents,  # pyright: ignore[reportAttributeAccessIssue]
+            tasks=self.tasks,  # pyright: ignore[reportAttributeAccessIssue]
             process=Process.sequential,
             memory=False,
             verbose=True,
@@ -136,7 +141,7 @@ class AutoResponderCrew(BaseCrew):
     @agent
     def categorizer(self) -> Agent:
         return Agent(
-            config=self.agents_config["categorizer"],
+            config=self.agents_config["categorizer"],  # pyright: ignore[reportArgumentType]
             verbose=True,
             llm=_gateway_llm(GATEWAY_FAST_MODEL),
         )
@@ -147,7 +152,7 @@ class AutoResponderCrew(BaseCrew):
         if RESPONSE_TEMPERATURE is not None:
             agent_kwargs["temperature"] = RESPONSE_TEMPERATURE
         return Agent(
-            config=self.agents_config["response_writer"],
+            config=self.agents_config["response_writer"],  # pyright: ignore[reportArgumentType]
             tools=[
                 QdrantHybridSearchTool(self.knowledge_base()),
             ],
@@ -159,15 +164,15 @@ class AutoResponderCrew(BaseCrew):
 
     @task
     def categorization_task(self) -> Task:
-        return Task(
-            config=self.tasks_config["categorization_task"],
+        return Task(  # pyright: ignore[reportCallIssue]
+            config=self.tasks_config["categorization_task"],  # pyright: ignore[reportArgumentType]
             output_pydantic=models.EmailThreadCategories,
         )
 
     @task
     def response_writing_task(self):
-        return ConditionalTask(
-            config=self.tasks_config["response_writing_task"],
+        return ConditionalTask(  # pyright: ignore[reportCallIssue]
+            config=self.tasks_config["response_writing_task"],  # pyright: ignore[reportArgumentType]
             output_pydantic=models.EmailResponse,
             condition=self.is_a_question,
         )
@@ -178,13 +183,16 @@ class AutoResponderCrew(BaseCrew):
         # memory=False, so the embedder would never be used; passing the raw
         # dict also fails crewai 1.15's stricter EmbedderConfig validation.
         return Crew(
-            agents=self.agents,  # Automatically created by the @agent decorator
-            tasks=self.tasks,  # Automatically created by the @task decorator
+            agents=self.agents,  # pyright: ignore[reportAttributeAccessIssue]
+            tasks=self.tasks,  # pyright: ignore[reportAttributeAccessIssue]
             process=Process.sequential,
             memory=False,
             verbose=True,
         )
 
     def is_a_question(self, output: TaskOutput) -> bool:
-        email_thread_categories: models.EmailThreadCategories = output.pydantic  # noqa
+        # TaskOutput.pydantic is typed as BaseModel | None; at runtime it holds
+        # the previous task's output_pydantic model.
+        email_thread_categories = output.pydantic  # pyright: ignore[reportAssignmentType]
+        assert isinstance(email_thread_categories, models.EmailThreadCategories)
         return "QUESTION" in email_thread_categories.categories

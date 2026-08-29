@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -47,12 +48,16 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         min_content_length: int = 10,
         sparse_embedder=None,
     ):
+        # CrewBase's TYPE_CHECKING stub types __init__ as (*args, **kwargs),
+        # hiding the real BaseCrew positional signature from pyright.
         crew = KnowledgeOrganizingCrew(
-            embedder_config, qdrant_location, qdrant_api_key,
+            embedder_config,  # pyright: ignore[reportCallIssue]
+            qdrant_location,
+            qdrant_api_key,
             sparse_embedder=sparse_embedder,
         )
         self.crew = crew.crew()
-        self.knowledge_base = crew.knowledge_base()
+        self.knowledge_base = crew.knowledge_base()  # pyright: ignore[reportAttributeAccessIssue]
         self.min_content_length = min_content_length
         self._last_modified_at: dict[str, float] = {}
 
@@ -73,6 +78,7 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
                     path, attempt, FILE_READ_ATTEMPTS, FILE_READ_RETRY_DELAY_SEC,
                 )
                 time.sleep(FILE_READ_RETRY_DELAY_SEC)
+        raise AssertionError("unreachable")  # pragma: no cover
 
     @classmethod
     def _file_hash(cls, path: Path) -> str:
@@ -93,6 +99,7 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
                     path, attempt, FILE_READ_ATTEMPTS, FILE_READ_RETRY_DELAY_SEC,
                 )
                 time.sleep(FILE_READ_RETRY_DELAY_SEC)
+        raise AssertionError("unreachable")  # pragma: no cover
 
     def initialize(self, init_path: Path):
         """
@@ -144,28 +151,29 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         """
         if isinstance(event, DirCreatedEvent):
             return
+        src_path = os.fsdecode(event.src_path)
 
         # Verify if the file is really a Markdown file
-        if not event.src_path.endswith(".md"):
+        if not src_path.endswith(".md"):
             return
 
         # Skip files inside Obsidian's trash folder (deleted notes).
-        if "/.trash/" in event.src_path:
+        if "/.trash/" in src_path:
             return
 
         # Log the event
-        logger.info("New file created: %s", event.src_path)
+        logger.info("New file created: %s", src_path)
 
         # Load the file content. UTF-8 with sig handles BOM; errors="replace"
         # avoids crashing the watchdog thread on partially-written files.
-        file_content = self._read_text_with_retry(Path(event.src_path)).strip()
+        file_content = self._read_text_with_retry(Path(src_path)).strip()
 
         # Only process the file if the content is longer than the minimum length
         if len(file_content) < self.min_content_length:
             logger.info(
                 "The file content is shorter than the minimum length of %i: %s",
                 self.min_content_length,
-                event.src_path,
+                src_path,
             )
             return
 
@@ -185,7 +193,7 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         # Skip Excalidraw drawings — their .md files hold compressed drawing data
         # (large base64 blobs), not prose notes, and blow up the LLM request.
         if frontmatter.get("excalidraw-plugin") is not None:
-            logger.info("Skipping Excalidraw drawing: %s", event.src_path)
+            logger.info("Skipping Excalidraw drawing: %s", src_path)
             return
 
         # Run the knowledge organizing crew to store the file content in the knowledge base.
@@ -197,14 +205,14 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         for attempt in range(1, max_attempts + 1):
             try:
                 response = self.crew.kickoff(
-                    inputs={"src_path": event.src_path, "document": file_content}
+                    inputs={"src_path": src_path, "document": file_content}
                 )
                 break
             except Exception as e:  # noqa: BLE001
                 if attempt == max_attempts:
                     logger.error(
                         "Failed to process %s after %d attempts, skipping: %s",
-                        event.src_path,
+                        src_path,
                         max_attempts,
                         e,
                     )
@@ -214,27 +222,28 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
                     "Attempt %d/%d failed for %s: %s. Retrying in %ds...",
                     attempt,
                     max_attempts,
-                    event.src_path,
+                    src_path,
                     e,
                     delay,
                 )
                 time.sleep(delay)
-        if not isinstance(response.pydantic, models.ContextualizedChunks):
+        pydantic_output = getattr(response, "pydantic", None)
+        if not isinstance(pydantic_output, models.ContextualizedChunks):
             logger.info("Did not receive any contextualized chunks: %s", response)
             return
 
         # Store the response in the Qdrant knowledge base. Remove any existing
         # entries for this file first, then write the new chunks tagged with the
         # file's content hash so the next run can detect unchanged files.
-        file_hash = self._file_hash(Path(event.src_path))
-        self.knowledge_base.delete({"src_path": event.src_path})
-        document_chunks: models.ContextualizedChunks = response.pydantic  # noqa
+        file_hash = self._file_hash(Path(src_path))
+        self.knowledge_base.delete({"src_path": src_path})
+        document_chunks: models.ContextualizedChunks = pydantic_output
         total_chunks = len(document_chunks.chunks)
         batch: list[tuple[str, dict]] = []
         for chunk in document_chunks.chunks:
             formatted_input_data = f"{chunk.content}\n\n{chunk.context}"
             metadata = {
-                "src_path": event.src_path,
+                "src_path": src_path,
                 "content_hash": file_hash,
                 "total_chunks": total_chunks,
                 "chunk_context": chunk.context,
@@ -254,16 +263,17 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         """
         if isinstance(event, DirDeletedEvent):
             return
+        src_path = os.fsdecode(event.src_path)
 
         # Verify if the file is really a Markdown file
-        if not event.src_path.endswith(".md"):
+        if not src_path.endswith(".md"):
             return
 
         # Log the event
-        logger.info("File deleted: %s", event.src_path)
+        logger.info("File deleted: %s", src_path)
 
         # Remove all the entries related to the file from the knowledge base
-        self.knowledge_base.delete({"src_path": event.src_path})
+        self.knowledge_base.delete({"src_path": src_path})
 
     def on_modified(self, event: DirModifiedEvent | FileModifiedEvent) -> None:
         """
@@ -276,32 +286,33 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         """
         if isinstance(event, DirModifiedEvent):
             return
+        src_path = os.fsdecode(event.src_path)
 
         # Verify if the file is really a Markdown file
-        if not event.src_path.endswith(".md"):
+        if not src_path.endswith(".md"):
             return
 
         # Debounce: editors and sync tools fire multiple modified events for
         # a single save. Re-ingesting is expensive (LLM calls), so collapse
         # events that arrive within the debounce window.
         now = time.monotonic()
-        last = self._last_modified_at.get(event.src_path)
+        last = self._last_modified_at.get(src_path)
         if last is not None and (now - last) < MODIFY_DEBOUNCE_SEC:
-            self._last_modified_at[event.src_path] = now
+            self._last_modified_at[src_path] = now
             return
-        self._last_modified_at[event.src_path] = now
+        self._last_modified_at[src_path] = now
 
         # Log the event
-        logger.info("File modified: %s", event.src_path)
+        logger.info("File modified: %s", src_path)
 
         # Remove the existing content
         self.on_deleted(
-            FileDeletedEvent(event.src_path, event.dest_path, is_synthetic=True)
+            FileDeletedEvent(src_path, event.dest_path, is_synthetic=True)
         )
 
         # Load the new content
         self.on_created(
-            FileCreatedEvent(event.src_path, event.dest_path, is_synthetic=True)
+            FileCreatedEvent(src_path, event.dest_path, is_synthetic=True)
         )
 
     def on_moved(self, event: DirMovedEvent | FileMovedEvent) -> None:
@@ -312,9 +323,10 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         """
         if isinstance(event, DirMovedEvent):
             return
+        src_path = os.fsdecode(event.src_path)
 
         # Verify if the file is really a Markdown file
-        if not event.src_path.endswith(".md"):
+        if not src_path.endswith(".md"):
             return
 
         # Log the event
@@ -322,7 +334,7 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
 
         # Remove the existing content from the old path
         self.on_deleted(
-            FileDeletedEvent(event.src_path, event.dest_path, is_synthetic=True)
+            FileDeletedEvent(src_path, event.dest_path, is_synthetic=True)
         )
 
         # Load the new content from the new location
