@@ -50,6 +50,7 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         vault_root: Path | None = None,
         include_folders: list[str] | None = None,
         exclude_folders: list[str] | None = None,
+        exclude_frontmatter: list[str] | None = None,
     ):
         # CrewBase's TYPE_CHECKING stub types __init__ as (*args, **kwargs),
         # hiding the real BaseCrew positional signature from pyright.
@@ -65,6 +66,7 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         self._vault_root = vault_root
         self._include_folders = set(include_folders or [])
         self._exclude_folders = set(exclude_folders or [])
+        self._exclude_frontmatter = set(exclude_frontmatter or [])
         self._last_modified_at: dict[str, float] = {}
 
     def _top_level_folder(self, src_path: str) -> str | None:
@@ -197,11 +199,8 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         if not src_path.endswith(".md"):
             return
 
-        # Skip files inside Obsidian's trash folder (deleted notes).
-        if "/.trash/" in src_path:
-            return
-
-        # Skip files outside the configured vault folders.
+        # Skip files outside the configured vault folders (includes
+        # Obsidian's .trash folder, which holds deleted notes).
         if not self._in_scope(src_path):
             logger.info("Out of configured folders, skipping: %s", src_path)
             return
@@ -235,10 +234,14 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         except (StopIteration, yaml.YAMLError):
             frontmatter = {}
 
-        # Skip Excalidraw drawings — their .md files hold compressed drawing data
-        # (large base64 blobs), not prose notes, and blow up the LLM request.
-        if frontmatter.get("excalidraw-plugin") is not None:
-            logger.info("Skipping Excalidraw drawing: %s", src_path)
+        # Skip plugin-generated notes: e.g. Excalidraw drawings store
+        # compressed base64 blobs, not prose, and blow up the LLM request.
+        if self._exclude_frontmatter & frontmatter.keys():
+            logger.info(
+                "Excluded by frontmatter key (%s), skipping: %s",
+                self._exclude_frontmatter & frontmatter.keys(),
+                src_path,
+            )
             return
 
         # Run the knowledge organizing crew to store the file content in the knowledge base.

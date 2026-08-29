@@ -125,12 +125,21 @@ def _parse_folder_list(raw: str | None) -> list[str]:
 
 
 # Restrict ingestion by top-level vault folder (comma-separated names). Empty
-# include list = every folder; exclude then removes from that set.
+# include list = every folder; exclude then removes from that set. Obsidian's
+# trash folder is always excluded — it holds deleted notes, not knowledge.
 obsidian_include_folders = _parse_folder_list(
     os.environ.get("OBSIDIAN_INCLUDE_FOLDERS")
 )
-obsidian_exclude_folders = _parse_folder_list(
-    os.environ.get("OBSIDIAN_EXCLUDE_FOLDERS")
+obsidian_exclude_folders = sorted(
+    {".trash"}
+    | set(_parse_folder_list(os.environ.get("OBSIDIAN_EXCLUDE_FOLDERS")))
+)
+
+# Skip notes whose frontmatter contains any of these keys (comma-separated).
+# Excalidraw drawings store compressed base64 blobs, not prose, and would
+# blow up the LLM request.
+obsidian_exclude_frontmatter = _parse_folder_list(
+    os.environ.get("OBSIDIAN_EXCLUDE_FRONTMATTER", "excalidraw-plugin")
 )
 
 # AgentOps configuration

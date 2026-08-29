@@ -17,15 +17,17 @@ from email_assistant.storage import QdrantStorage  # noqa: E402
 def _folder_handler(
     include: list[str] | None = None,
     exclude: list[str] | None = None,
+    exclude_frontmatter: list[str] | None = None,
 ) -> AgenticObsidianVaultToQdrantHandler:
     # Bypass __init__ (which builds a crew + Qdrant client); the folder logic
-    # only needs the three attributes set below.
+    # only needs the attributes set below.
     handler = AgenticObsidianVaultToQdrantHandler.__new__(
         AgenticObsidianVaultToQdrantHandler
     )
     handler._vault_root = Path("D:/vault")
     handler._include_folders = set(include or [])
     handler._exclude_folders = set(exclude or [])
+    handler._exclude_frontmatter = set(exclude_frontmatter or [])
     return handler
 
 
@@ -182,3 +184,29 @@ class TestInScope:
     def test_empty_config_accepts_all(self):
         handler = _folder_handler()
         assert handler._in_scope("D:/vault/任意文件夹/a.md") is True
+
+    def test_trash_folder_always_excluded_via_config_default(self):
+        # config.py folds ".trash" into the exclude set; on_created no
+        # longer has a separate hardcoded trash check.
+        handler = _folder_handler(exclude=[".trash"])
+        assert handler._in_scope("D:/vault/.trash/a.md") is False
+
+
+class TestExcludeFrontmatter:
+    # on_created skips a file when the configured exclude keys intersect the
+    # note's frontmatter keys (e.g. Excalidraw's excalidraw-plugin).
+    @staticmethod
+    def excluded(handler, frontmatter: dict) -> bool:
+        return bool(handler._exclude_frontmatter & frontmatter.keys())
+
+    def test_excalidraw_key_excluded(self):
+        handler = _folder_handler(exclude_frontmatter=["excalidraw-plugin"])
+        assert self.excluded(handler, {"excalidraw-plugin": "raw"}) is True
+
+    def test_other_frontmatter_proceeds(self):
+        handler = _folder_handler(exclude_frontmatter=["excalidraw-plugin"])
+        assert self.excluded(handler, {"tags": ["x"]}) is False
+
+    def test_empty_config_proceeds(self):
+        handler = _folder_handler()
+        assert self.excluded(handler, {"excalidraw-plugin": ""}) is False
