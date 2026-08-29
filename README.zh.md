@@ -113,7 +113,7 @@ NO_TOOL_CHOICE_MODELS=deepseek-v4,qwen3.8
 4. 首次运行会弹出浏览器让你授权，之后生成 `token.json` 复用。
 
 > 若处于防火墙/GFW 环境，Python 进程需要代理才能访问 `www.googleapis.com`：
-> `export HTTPS_PROXY=http://127.0.0.1:7890`（建议写入 shell 配置文件）。
+> 在 `.env` 里加 `HTTPS_PROXY=http://127.0.0.1:7890`（启动时自动加载）。
 
 ---
 
@@ -126,15 +126,13 @@ uv sync                      # 创建 .venv 并安装依赖
 uv run main.py               # 启动助手
 ```
 
-防火墙/GFW 环境下，启动前先设代理：
+防火墙/GFW 环境下，把代理写进 `.env` 即可，程序启动时会自动加载：
 
-```bash
-export HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890   # macOS / Linux
+```dotenv
+HTTPS_PROXY=http://127.0.0.1:7890
 ```
 
-```powershell
-$env:HTTPS_PROXY = "http://127.0.0.1:7897"; $env:HTTP_PROXY = "http://127.0.0.1:7897"   # Windows
-```
+（端口号改成你代理软件的实际 HTTP 端口；网络环境不需要代理时删掉这行。）
 
 `main.py` 会启动两个线程：
 

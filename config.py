@@ -7,6 +7,13 @@ from fastembed import TextEmbedding
 # Load dotenv file
 load_dotenv(".env")
 
+# The proxy needed to reach Google/Qdrant Cloud must be set before any client
+# library builds its connection, so it lives here rather than in the shell.
+# Set HTTPS_PROXY in .env (or delete the line on networks that don't need it).
+_os_proxy = os.environ.get("HTTPS_PROXY")
+if _os_proxy:
+    os.environ.setdefault("HTTP_PROXY", _os_proxy)
+
 # ---------------------------------------------------------------------------
 # LLM gateway configuration (OpenAI-compatible)
 #
