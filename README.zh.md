@@ -49,7 +49,11 @@
 
 - **内容哈希幂等** —— 每个 chunk 都存源文件的 SHA-256。启动时，只有内容变了才会重新入库。
 - **孤儿清理** —— 启动时，源文件已不在笔记库里的 chunk 会被删除，保证 Obsidian 是 Qdrant 的唯一事实来源。
-- **类型过滤** —— 跳过 Excalidraw 绘图和 `.trash/` 回收站文件（它们不是正文笔记）。
+- **类型过滤** —— 默认配置跳过 Excalidraw 绘图、`.trash/` 回收站和 `.obsidian/` 配置目录（它们不是正文笔记），条目都可在 `.env` 里增删。
+
+### 笔记质量建议
+
+建议把库内笔记的创建和编辑交给编码 agent（Claude Code、Codex、OpenCode、Hermes、OpenClaw、DeepSeek harness 等）完成，而不是从聊天窗口复制粘贴。手工粘贴容易带进脏数据——典型如 `vscode-webview://` 这类会话级失效链接、复制损坏的表格竖线。这些垃圾 token 会被 jieba 分词后写进稀疏（BM25）向量：死链接哈希占据词表维度却永远不会被任何查询命中，白白稀释稀疏表示；夹在死链接里的真实路径（本来对词法检索很有价值）也因此难以被干净地匹配。
 
 ---
 
@@ -57,7 +61,7 @@
 
 - [CrewAI](https://www.crewai.com/) `1.15` —— agent 编排
 - [Qdrant](https://qdrant.tech/) —— 向量库 / 知识库，**混合检索**（稠密 + 稀疏向量 RRF 融合，再经交叉编码器重排）
-- [fastembed](https://github.com/qdrant/fastembed) —— 本地 ONNX 嵌入：`BAAI/bge-small-en-v1.5`（稠密）+ `Qdrant/bm25` 接 jieba 分词（稀疏）+ `BAAI/bge-reranker-base`（重排）
+- [fastembed](https://github.com/qdrant/fastembed) —— 本地 ONNX 嵌入：`BAAI/bge-small-zh-v1.5`（稠密）+ `Qdrant/bm25` 接 jieba 分词（稀疏）+ `BAAI/bge-reranker-base`（重排）
 - [jieba](https://github.com/fxsjy/jieba) —— 中文分词，喂给 BM25 稀疏检索路径
 - **OpenAI 兼容网关**承载 DeepSeek 模型（所有 LLM 调用）
 - Gmail API（OAuth 2.0）
@@ -76,6 +80,8 @@
 - 一个 OpenAI 兼容网关的 URL + API key
 - Gmail API 凭据（见下文）
 
+> 用 VSCode 时建议直接打开 `emailAssistant-obsidian` 文件夹作为工作区，Pylance 会自动应用 `pyproject.toml` 里的 pyright 配置。
+
 ---
 
 ## 配置
@@ -91,14 +97,23 @@ GATEWAY_FAST_MODEL=deepseek-v4-flash
 
 # 本地嵌入模型（fastembed）
 # 若 Hugging Face 无法访问，设 HF_ENDPOINT=https://hf-mirror.com
-EMBEDDING_MODEL_NAME=BAAI/bge-small-en-v1.5
+# 中文为主用 zh，英文为主用 en
+EMBEDDING_MODEL_NAME=BAAI/bge-small-zh-v1.5
+SPARSE_MODEL_NAME=Qdrant/bm25
+RERANKER_MODEL_NAME=BAAI/bge-reranker-base
 
 # Qdrant（本地 Docker 无需 API key）
 QDRANT_LOCATION=http://localhost:6333
 QDRANT_API_KEY=
+QDRANT_COLLECTION_NAME=obsidian-notes
 
 # Obsidian 笔记库路径（知识库来源）
 OBSIDIAN_VAULT_PATH=/path/to/your/vault
+# 摄取范围控制：INCLUDE 留空 = 全部文件夹；EXCLUDE 默认排除回收站
+# （.trash）和程序配置目录（.obsidian）；frontmatter 排除键默认过滤
+# Excalidraw 画板。全部可按需增删。
+OBSIDIAN_EXCLUDE_FOLDERS=.trash,.obsidian
+OBSIDIAN_EXCLUDE_FRONTMATTER=excalidraw-plugin
 
 # 代理（防火墙/GFW 环境必填，程序启动时自动加载，无需在 shell 里 export）
 # 端口改成你代理软件的 HTTP 端口；网络环境不需要代理时删掉或注释这行
@@ -106,10 +121,12 @@ HTTPS_PROXY=http://127.0.0.1:7890
 
 # 可选调优
 # 每次 LLM 调用的超时（秒，默认 180）
-LLM_TIMEOUT_SEC=180
+#LLM_TIMEOUT_SEC=180
+# 回复写作 agent 的可选 temperature 覆盖（调试幻觉时用）
+#RESPONSE_TEMPERATURE=0.3
 # 拒绝 tool_choice 的网关模型（思考型模型），逗号分隔的子串匹配。
 # 命中的模型会回退到 JSON 模式的结构化输出。
-NO_TOOL_CHOICE_MODELS=deepseek-v4,qwen3.8
+#NO_TOOL_CHOICE_MODELS=deepseek-v4,qwen3.8
 ```
 
 ### Gmail OAuth 凭据
@@ -194,7 +211,7 @@ A：access token 1 小时就过期。现在代码会通过 refresh token 静默�
 
 **Q：Excalidraw 绘图 / 回收站的笔记被灌进知识库了？**
 
-A：两者都已被过滤：Excalidraw 的 `.md`（通过 `excalidraw-plugin` frontmatter 识别）和 `.trash/` 文件在入库时被跳过。
+A：默认已被过滤：Excalidraw 的 `.md`（通过 `excalidraw-plugin` frontmatter 识别）和 `.trash/`、`.obsidian/` 文件夹在入库时被跳过（见 `.env` 里的 `OBSIDIAN_EXCLUDE_*` 配置）。
 
 **Q：入库很慢？**
 

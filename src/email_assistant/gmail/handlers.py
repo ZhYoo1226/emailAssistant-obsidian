@@ -6,23 +6,20 @@ import re
 from litellm import completion
 from markdownify import markdownify
 
+import config
 from email_assistant import models
-from email_assistant.crew import GATEWAY_FAST_MODEL, AutoResponderCrew
+from email_assistant.crew import AutoResponderCrew
 from email_assistant.gmail import events
 
 logger = logging.getLogger(__name__)
 
-# Timeout for the faithfulness-check LLM call, so a hung gateway connection
-# cannot block the inbox processing loop forever.
-FAITHFULNESS_TIMEOUT_SEC = int(os.environ.get("LLM_TIMEOUT_SEC", "180"))
-
-# Sentinel the responder task instructs the model to write when the knowledge
-# base has no answer (see config/autoresponder/tasks.yaml). It is meant for the
-# program, not the recipient, so it must never be sent out as-is.
+# 回复任务指示模型在知识库给不出答案时写下的哨兵文本（见
+# config/autoresponder/tasks.yaml）。它是给程序看的，不是给收件人看的，
+# 绝不能原样发送出去。
 NO_RESPONSE_SENTINEL = "I cannot provide a response"
 
-# Citation markers the model may leak into the reply text (e.g. "blodguy_ink[来源1]")
-# despite the prompt forbidding them. Stripped before sending.
+# 模型可能把引用标记泄漏进回复文本（如 "blodguy_ink[来源1]"），
+# 尽管提示词已禁止。发送前先剥掉。
 _CITATION_MARKER_RE = re.compile(
     r"\s*[\[\(](?:来源|source|ref(?:erence)?)\s*\d+[\]\)]", re.IGNORECASE
 )
@@ -31,27 +28,27 @@ _BARE_INDEX_RE = re.compile(r"\s*\[\d+\]")
 
 class GmailInboxEventHandler(abc.ABC):  # noqa: B024 — optional-handler pattern
     """
-    A generic handler for all the events happening in the Gmail Inbox.
+    Gmail 收件箱中所有事件的通用处理器。
     """
 
     def on_message_added(self, event: events.MessageAddedEvent):  # noqa: B027
         """
-        Handle the event when a new message is added to the Gmail Inbox.
-        :param event: the event to handle
+        处理新邮件到达 Gmail 收件箱的事件。
+        :param event: 要处理的事件
         """
         pass
 
     def on_message_deleted(self, event: events.MessageDeletedEvent):  # noqa: B027
         """
-        Handle the event when a message is deleted from the Gmail Inbox.
-        :param event: the event to handle
+        处理邮件从 Gmail 收件箱中删除的事件。
+        :param event: 要处理的事件
         """
         pass
 
 
 class AgenticAutoReplyHandler(GmailInboxEventHandler):
     """
-    An event handler that sends an automatic reply to the sender of the email.
+    给邮件发件人发送自动回复的事件处理器。
     """
 
     def __init__(
@@ -62,8 +59,8 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
         sparse_embedder=None,
         reranker=None,
     ):
-        # CrewBase's TYPE_CHECKING stub hides the real BaseCrew signature
-        # from pyright (see obsidian/handlers.py for details).
+        # CrewBase 的 TYPE_CHECKING stub 向 pyright 隐藏了 BaseCrew 的
+        # 真实签名（详见 obsidian/handlers.py）。
         crew_builder = AutoResponderCrew(
             embedder_config,  # pyright: ignore[reportCallIssue]
             qdrant_location,
@@ -76,31 +73,30 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
 
     def on_message_added(self, event: events.MessageAddedEvent):
         """
-        Handle the event when a new message is added to the Gmail Inbox.
-        :param event: the event to handle
+        处理新邮件到达 Gmail 收件箱的事件。
+        :param event: 要处理的事件
         """
         service = event.service()
         message = event.message()
         logger.info("Received a new message: %s", message)
 
-        # Load the full thread
+        # 加载完整会话
         thread = service.load_full_thread(message.thread_id)
         last_message = thread.messages[-1]
         last_labels = last_message.label_ids or []
 
-        # We only want to process unread messages, so we skip the read ones
+        # 只处理未读邮件，已读的直接跳过
         if "UNREAD" not in last_labels:
             logger.info("The last message is already read. Skipping the reply.")
             return
 
-        # If the last message is already a draft, then do not make a reply
+        # 最后一封邮件若是草稿，则不回复
         if "DRAFT" in last_labels:
             logger.info("The last message is already a draft. Skipping the reply.")
             return
 
-        # Decode the messages and convert them to Markdown. Skip drafts — they
-        # are the system's own previous replies and must not be fed back into
-        # the categorizer (which would otherwise misfile the thread as spam).
+        # 解码各封邮件并转成 Markdown。跳过草稿——它们是系统自己之前
+        # 的回复，不能喂回给分类器（否则会话会被错误地归为垃圾邮件）。
         non_draft_messages = [
             message for message in thread.messages
             if "DRAFT" not in (message.label_ids or [])
@@ -112,7 +108,7 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
             markdownify(decoded_message.content) for decoded_message in decoded_messages
         ]
 
-        # Call the crew to generate a response
+        # 调用 crew 生成回复
         response = self.crew.kickoff(inputs={"messages": md_messages})
         pydantic_output = getattr(response, "pydantic", None)
         logger.info("Generated response: %s", pydantic_output)
@@ -122,16 +118,15 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
             )
             return
 
-        # Create a draft with the generated response
+        # 用生成的回复创建草稿
         email_response = pydantic_output
         if email_response.content is None:
             logger.info("The response is empty. Skipping the reply.")
             return
 
-        # Verify citations before sending: the cited sources must be real files
-        # in the knowledge base, and the reply must be faithful to them. If the
-        # reply can't be verified, send a graceful "out of scope" reply instead
-        # of staying silent.
+        # 发送前校验引用：被引用的来源必须是知识库中真实存在的文件，
+        # 且回复必须忠实于来源。校验不通过时发送得体的“超出范围”回复，
+        # 而不是保持沉默。
         if not self._verify_sources(email_response):
             logger.warning("Sources could not be verified. Sending fallback reply.")
             service.send_message(
@@ -169,15 +164,15 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
 
     def _verify_sources(self, email_response: models.EmailResponse) -> bool:
         """
-        Check that every cited src_path actually exists in the knowledge base.
-        An empty sources list is allowed (e.g. "I cannot provide a response").
+        检查每个被引用的 src_path 是否真实存在于知识库中。
+        空的来源列表是允许的（如 "I cannot provide a response" 的情形）。
         """
         if not email_response.sources:
             return True
 
         def _normalize(path: str) -> str:
-            # The model often emits JSON-escaped or posix-style paths; compare
-            # on a normalized form so a real citation is not rejected.
+            # 模型常输出 JSON 转义或 posix 风格的路径；在归一化形式上
+            # 比较，避免真实的引用被误拒。
             return os.path.normcase(path.replace("\\\\", "\\").replace("/", "\\"))
 
         indexed_paths = {
@@ -193,8 +188,8 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
 
     def _verify_faithfulness(self, email_response: models.EmailResponse) -> bool:
         """
-        Ask the fast model whether the reply's factual statements are supported
-        by the cited sources (a cheap LLM stand-in for a dedicated NLI model).
+        用快速模型判断回复中的事实性陈述是否被引用来源支持
+        （用低成本的 LLM 代替专门的 NLI 模型）。
         """
         if not email_response.sources:
             return True
@@ -208,12 +203,12 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
             "Question: is every factual statement in the reply supported by the cited "
             "sources? Answer with only YES or NO."
         )
-        # litellm's stubs type the sync return as CustomStreamWrapper; the
-        # actual non-streaming response carries .choices.
+        # litellm 的 stub 把同步返回类型标注成了 CustomStreamWrapper；
+        # 实际的非流式响应带有 .choices。
         response = completion(
-            model=f"openai/{GATEWAY_FAST_MODEL}",
+            model=f"openai/{config.gateway_fast_model}",
             messages=[{"role": "user", "content": prompt}],
-            timeout=FAITHFULNESS_TIMEOUT_SEC,
+            timeout=config.LLM_TIMEOUT_SEC,
         )
         verdict = (response.choices[0].message.content or "").strip().upper()  # pyright: ignore[reportAttributeAccessIssue]
         logger.info("Faithfulness verdict: %s", verdict)
@@ -221,9 +216,8 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
 
     def _fallback_reply(self, question_snippet: str | None) -> str:
         """
-        A graceful "out of scope" reply sent when the knowledge base can't
-        support a faithful answer. Lets the sender know an AI assistant is
-        replying and the question needs the human's attention.
+        知识库无法支撑一个忠实回答时发送的得体的“超出范围”回复。
+        让发件人知道正在回复的是 AI 助手，问题需要本人关注。
         """
         question = (question_snippet or "您的问题").strip()[:10]
         return (

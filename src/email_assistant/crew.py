@@ -1,4 +1,3 @@
-import os
 from typing import Any
 
 from crewai import Agent, Crew, Process, Task
@@ -7,37 +6,27 @@ from crewai.project import CrewBase, agent, crew, task
 from crewai.tasks import TaskOutput
 from crewai.tasks.conditional_task import ConditionalTask
 
+import config
 from email_assistant import models
 from email_assistant.storage import QdrantStorage
 from email_assistant.tools.qdrant_tool.tool import (
     QdrantHybridSearchTool,
 )
 
-# Models served by the OpenAI-compatible gateway (see config.py).
-GATEWAY_MAIN_MODEL = os.environ.get("GATEWAY_MAIN_MODEL", "deepseek-v4-pro")
-GATEWAY_FAST_MODEL = os.environ.get("GATEWAY_FAST_MODEL", "deepseek-v4-flash")
-
-# Optional temperature override for the response writer (for debugging
-# hallucination). Leave unset to use the model default.
-RESPONSE_TEMPERATURE = None
-if os.environ.get("RESPONSE_TEMPERATURE"):
-    RESPONSE_TEMPERATURE = float(os.environ["RESPONSE_TEMPERATURE"])
-
-# Timeout (seconds) for every LLM call, so a hung gateway connection cannot
-# block an email-processing or ingestion run forever. DeepSeek thinking-mode
-# models can legitimately take a while, so this is generous.
-LLM_TIMEOUT_SEC = int(os.environ.get("LLM_TIMEOUT_SEC", "180"))
-
 
 def _gateway_llm(model: str) -> LLM:
-    # crewai 1.15: Agent has no `timeout` param (it was silently ignored);
-    # the timeout belongs on the LLM instance, which passes it to litellm.
-    return LLM(model=f"openai/{model}", timeout=LLM_TIMEOUT_SEC)
+    # crewai 1.15：Agent 没有 `timeout` 参数（传了也会被静默忽略）；
+    # 超时应设置在 LLM 实例上，由它传给 litellm。
+    # LLM 无显式 __init__，timeout 是 pydantic 字段（运行时合法），
+    # 但基类 BaseLLM 的 stub 未声明它，Pylance 误报——忽略。
+    return LLM(  # pyright: ignore[reportCallIssue]
+        model=f"openai/{model}", timeout=config.LLM_TIMEOUT_SEC
+    )
 
 
 class BaseCrew:
     """
-    Base class for the crews in the project.
+    项目中各 crew 的基类。
     """
 
     def __init__(
@@ -53,9 +42,9 @@ class BaseCrew:
         self.qdrant_api_key = qdrant_api_key
         self.sparse_embedder = sparse_embedder
         self.reranker = reranker
-        # A single shared storage instance: both the search tool and the
-        # handler use it, so we must not create one per knowledge_base() call
-        # (each would open its own Qdrant client and reload the embedder).
+        # 单个共享的 storage 实例：搜索工具和 handler 都使用它，
+        # 所以不能在每次 knowledge_base() 调用时各建一个
+        # （那样会各自打开 Qdrant 客户端并重新加载嵌入模型）。
         self._knowledge_base: QdrantStorage | None = None
 
     def knowledge_base(self) -> QdrantStorage:
@@ -74,23 +63,22 @@ class BaseCrew:
 @CrewBase
 class KnowledgeOrganizingCrew(BaseCrew):
     """
-    A crew responsible for processing raw text data and converting it into structured knowledge.
+    负责处理原始文本数据、将其转化为结构化知识的 crew。
     """
 
     agents_config = "config/knowledge/agents.yaml"
     tasks_config = "config/knowledge/tasks.yaml"
 
-    # CrewBase's metaclass rewrites these class attrs at runtime: the configs
-    # become dicts loaded from YAML and agents/tasks are injected by the
-    # decorators. The stubs type them as lists, so string lookups below need
-    # per-line ignores.
+    # CrewBase 的元类会在运行时改写这些类属性：config 变成从 YAML 加载
+    # 的 dict，agents/tasks 由装饰器注入。stub 把它们标注为 list，所以
+    # 下面按字符串取值时需要逐行 ignore。
 
     @agent
     def chunks_extractor(self) -> Agent:
         return Agent(
             config=self.agents_config["chunks_extractor"],  # pyright: ignore[reportArgumentType]
             verbose=True,
-            llm=_gateway_llm(GATEWAY_FAST_MODEL),
+            llm=_gateway_llm(config.gateway_fast_model),
         )
 
     @agent
@@ -98,7 +86,7 @@ class KnowledgeOrganizingCrew(BaseCrew):
         return Agent(
             config=self.agents_config["contextualizer"],  # pyright: ignore[reportArgumentType]
             verbose=True,
-            llm=_gateway_llm(GATEWAY_FAST_MODEL),
+            llm=_gateway_llm(config.gateway_fast_model),
         )
 
     @task
@@ -110,8 +98,8 @@ class KnowledgeOrganizingCrew(BaseCrew):
 
     @task
     def contextualize_chunks(self) -> Task:
-        # The task description is borrowed from the Anthropic Contextual Retrieval
-        # See: https://www.anthropic.com/news/contextual-retrieval/
+        # 任务描述借鉴自 Anthropic 的 Contextual Retrieval
+        # 参见：https://www.anthropic.com/news/contextual-retrieval/
         return Task(  # pyright: ignore[reportCallIssue]
             config=self.tasks_config["contextualize_chunks"],  # pyright: ignore[reportArgumentType]
             output_pydantic=models.ContextualizedChunks,
@@ -119,9 +107,9 @@ class KnowledgeOrganizingCrew(BaseCrew):
 
     @crew
     def crew(self) -> Crew:
-        """Creates the KnowledgeOrganizingCrew crew"""
-        # memory=False, so the embedder would never be used; passing the raw
-        # dict also fails crewai 1.15's stricter EmbedderConfig validation.
+        """创建 KnowledgeOrganizingCrew"""
+        # memory=False，嵌入器永远不会被用到；传原始 dict 也会
+        # 触发 crewai 1.15 更严格的 EmbedderConfig 校验失败。
         return Crew(
             agents=self.agents,  # pyright: ignore[reportAttributeAccessIssue]
             tasks=self.tasks,  # pyright: ignore[reportAttributeAccessIssue]
@@ -133,7 +121,7 @@ class KnowledgeOrganizingCrew(BaseCrew):
 
 @CrewBase
 class AutoResponderCrew(BaseCrew):
-    """AutoResponderCrew crew"""
+    """自动回复 crew"""
 
     agents_config = "config/autoresponder/agents.yaml"
     tasks_config = "config/autoresponder/tasks.yaml"
@@ -143,21 +131,21 @@ class AutoResponderCrew(BaseCrew):
         return Agent(
             config=self.agents_config["categorizer"],  # pyright: ignore[reportArgumentType]
             verbose=True,
-            llm=_gateway_llm(GATEWAY_FAST_MODEL),
+            llm=_gateway_llm(config.gateway_fast_model),
         )
 
     @agent
     def response_writer(self) -> Agent:
         agent_kwargs = {}
-        if RESPONSE_TEMPERATURE is not None:
-            agent_kwargs["temperature"] = RESPONSE_TEMPERATURE
+        if config.response_temperature is not None:
+            agent_kwargs["temperature"] = config.response_temperature
         return Agent(
             config=self.agents_config["response_writer"],  # pyright: ignore[reportArgumentType]
             tools=[
                 QdrantHybridSearchTool(self.knowledge_base()),
             ],
             verbose=True,
-            llm=_gateway_llm(GATEWAY_MAIN_MODEL),
+            llm=_gateway_llm(config.gateway_main_model),
             max_iter=4,
             **agent_kwargs,
         )
@@ -179,9 +167,9 @@ class AutoResponderCrew(BaseCrew):
 
     @crew
     def crew(self) -> Crew:
-        """Creates the AutoResponderCrew crew"""
-        # memory=False, so the embedder would never be used; passing the raw
-        # dict also fails crewai 1.15's stricter EmbedderConfig validation.
+        """创建 AutoResponderCrew"""
+        # memory=False，嵌入器永远不会被用到；传原始 dict 也会
+        # 触发 crewai 1.15 更严格的 EmbedderConfig 校验失败。
         return Crew(
             agents=self.agents,  # pyright: ignore[reportAttributeAccessIssue]
             tasks=self.tasks,  # pyright: ignore[reportAttributeAccessIssue]
@@ -191,8 +179,8 @@ class AutoResponderCrew(BaseCrew):
         )
 
     def is_a_question(self, output: TaskOutput) -> bool:
-        # TaskOutput.pydantic is typed as BaseModel | None; at runtime it holds
-        # the previous task's output_pydantic model.
+        # TaskOutput.pydantic 的类型标注是 BaseModel | None；运行时它
+        # 持有上一个任务的 output_pydantic 模型。
         email_thread_categories = output.pydantic  # pyright: ignore[reportAssignmentType]
         assert isinstance(email_thread_categories, models.EmailThreadCategories)
         return "QUESTION" in email_thread_categories.categories

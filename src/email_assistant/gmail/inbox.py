@@ -13,15 +13,14 @@ from email_assistant.gmail.handlers import GmailInboxEventHandler
 
 logger = logging.getLogger(__name__)
 
-# How often (in seconds) the state is flushed to disk during processing, so a
-# crash does not lose the cursor progress since the last graceful shutdown.
+# 处理期间每隔多少秒把状态刷到磁盘一次，这样崩溃也不会丢失自上次
+# 优雅关闭以来的游标进度。
 STATE_SAVE_INTERVAL_SEC = 60
 
 
 class GmailInboxState(BaseModel):
     """
-    A state of the Gmail Inbox processing. It allows to resume the processing
-    from the last known state after a restart.
+    Gmail 收件箱的处理状态。重启后可以从最后已知的状态恢复处理。
     """
 
     process_all_unread_threads: bool = Field(
@@ -36,10 +35,9 @@ class GmailInboxState(BaseModel):
 
     def update_last_history_id(self, new_history_id: int) -> bool:
         """
-        Update the last history ID to the new value, but only if it is greater
-        than the current one.
-        :param new_history_id: the new history ID
-        :return: True if the last history ID was updated, False otherwise
+        用新值更新最后的 history ID，但仅当新值大于当前值时才更新。
+        :param new_history_id: 新的 history ID
+        :return: 更新了则返回 True，否则返回 False
         """
         if self.last_history_id is None or new_history_id > self.last_history_id:
             self.last_history_id = new_history_id
@@ -49,9 +47,9 @@ class GmailInboxState(BaseModel):
     @classmethod
     def load_state(cls, path: Path) -> "GmailInboxState":
         """
-        Load the state of the listener from the specified path.
-        :param path: the path to load the state
-        :return: the loaded state
+        从指定路径加载监听器状态。
+        :param path: 加载状态的路径
+        :return: 加载的状态
         """
         with open(path, encoding="utf-8") as f:
             state_json = json.load(f)
@@ -59,8 +57,8 @@ class GmailInboxState(BaseModel):
 
     def save(self, path: Path) -> None:
         """
-        Save the current state of the listener to the specified path.
-        :param path: the path to save the state
+        把监听器当前状态保存到指定路径。
+        :param path: 保存状态的路径
         """
         with open(path, "w", encoding="utf-8") as f:
             state_json = self.model_dump(mode="json")
@@ -69,8 +67,8 @@ class GmailInboxState(BaseModel):
 
 class GmailInboxListener(BaseThread):
     """
-    A listener runs a loop that listens for new events in the Gmail Inbox and
-    triggers the event handlers once the event occurs.
+    监听器运行一个循环，监听 Gmail 收件箱中的新事件，事件发生时
+    触发对应的事件处理器。
     """
 
     DEFAULT_CHARSET = "utf-8"
@@ -97,21 +95,21 @@ class GmailInboxListener(BaseThread):
 
     def add_handler(self, handler: GmailInboxEventHandler):
         """
-        Add a new handler to the listener.
-        :param handler: the handler to add
+        向监听器添加新的处理器。
+        :param handler: 要添加的处理器
         """
         self._handlers.append(handler)
 
     def on_thread_start(self) -> None:
-        # Ensure the user is authenticated in Google API
+        # 确保用户已通过 Google API 认证
         if not self._service.is_authenticated():
             self._service.authenticate()
 
     def _save_state_if_due(self, force: bool = False) -> None:
         """
-        Periodically flush the state to disk so a crash does not rewind the
-        cursor to the last graceful shutdown (which could re-send replies).
-        :param force: save immediately regardless of the interval
+        周期性地把状态刷到磁盘，这样崩溃也不会把游标回退到上次优雅
+        关闭的时刻（否则可能重发回复）。
+        :param force: 不理会间隔，立即保存
         """
         if self._state_file is None:
             return
@@ -125,49 +123,49 @@ class GmailInboxListener(BaseThread):
 
     def _process_unread_threads(self) -> None:
         """
-        Load all the unread threads and process them if requested.
+        如有需要，加载所有未读会话并处理它们。
         """
         counter = -1
         for counter, unread_thread in enumerate(
             self._service.iter_unread_threads()
         ):
-            # Update the last history ID, so we do not process the same threads again
+            # 更新最后的 history ID，避免重复处理同样的会话
             self._state.update_last_history_id(int(unread_thread.history_id))
             if not unread_thread.messages:
                 continue
 
-            # Emit only the last message of the thread
+            # 只对会话中的最后一封邮件发出事件
             self.emit_message_added_event(unread_thread.messages[-1])
             if counter % 100 == 99:
                 logger.info("Processed %i unread threads", counter + 1)
             self._save_state_if_due()
 
-        # Log the number of processed unread threads
+        # 记录处理完的未读会话数量
         logger.info("Processed all unread threads (%i)", counter + 1)
 
-        # Update the state so the unread threads are not processed again
+        # 更新状态，未读会话不会被再次处理
         self._state.process_all_unread_threads = False
         self._save_state_if_due(force=True)
 
     def run(self) -> None:
         """
-        Start the listener and run the loop that listens for new events in the Gmail Inbox.
+        启动监听器，运行监听 Gmail 收件箱新事件的循环。
         """
         if self._state.process_all_unread_threads:
             self._process_unread_threads()
 
         while True:
-            # If we still don't have the last history ID, we just extract the last one
-            # from the Google Gmail service and sta`rt processing from here
+            # 还没有最后的 history ID 时，从 Google Gmail 服务取当前
+            # 最大的一个，从这里开始处理
             if self._state.last_history_id is None:
                 current_max_history_id = self._service.load_max_history_id()
                 assert current_max_history_id is not None
                 self._state.update_last_history_id(current_max_history_id)
 
-            # Log the state before starting the loop over the history
+            # 开始遍历历史前先记录状态
             logger.info("Current state: %s", self._state)
 
-            # Get the history starting from the last known history ID
+            # 从最后已知的 history ID 起获取历史
             counter = -1
             assert self._state.last_history_id is not None
             try:
@@ -175,14 +173,14 @@ class GmailInboxListener(BaseThread):
                     self._state.last_history_id
                 )
                 for counter, history in enumerate(history_generator):
-                    # Update the last history ID, so we do not process the same history again
+                    # 更新最后的 history ID，避免重复处理同样的历史
                     self._state.update_last_history_id(int(history.id))
 
-                    # Iterate over the messages added and call the handlers
+                    # 遍历新增邮件并调用处理器
                     for message_added in history.messages_added:
                         self.emit_message_added_event(message_added.message)
 
-                    # Iterate over the messages deleted and call the handlers
+                    # 遍历删除邮件并调用处理器
                     for message_deleted in history.messages_deleted:
                         self.emit_message_deleted_event(message_deleted.message)
 
@@ -190,12 +188,11 @@ class GmailInboxListener(BaseThread):
                         logger.info("Processed %i history events", counter + 1)
                     self._save_state_if_due()
 
-                # Log the number of processed history events
+                # 记录处理完的历史事件数量
                 logger.info("Processed %i history events", counter + 1)
             except HistoryExpiredError as e:
-                # The stored cursor is older than Gmail's history retention
-                # (roughly a week). Fall back to a full rescan of unread
-                # threads, otherwise we would poll the expired ID forever.
+                # 存储的游标已早于 Gmail 的历史保留期（约一周）。回退到
+                # 全量重扫未读会话，否则会永远轮询这个过期 ID。
                 logger.warning(
                     "%s. Falling back to a full rescan of unread threads.", e
                 )
@@ -204,21 +201,20 @@ class GmailInboxListener(BaseThread):
                 self._save_state_if_due(force=True)
                 continue
 
-            # Wait for the polling time to not overload the Gmail API
+            # 等待一个轮询间隔，避免打爆 Gmail API
             time.sleep(self._polling_time_sec)
 
     def state(self) -> GmailInboxState:
         """
-        Get the current state of the listener. Useful to save it to disk and load
-        it after the restart.
+        获取监听器当前的状态。便于保存到磁盘并在重启后加载。
         :return:
         """
         return self._state
 
     def emit_message_added_event(self, message: models.Message):
         """
-        Emit the message added event to all the registered handlers.
-        :param message: the message to emit
+        向所有已注册的处理器发出邮件新增事件。
+        :param message: 要发出事件的邮件
         """
         logger.debug("Emitting the message added event %s", message)
         event = events.MessageAddedEvent(self._service, message)
@@ -226,8 +222,8 @@ class GmailInboxListener(BaseThread):
             try:
                 handler.on_message_added(event)
             except Exception as e:
-                # A failed handler must not silently consume the message: log
-                # loudly so the failure is visible and can be retried manually.
+                # 处理器失败不能静默吞掉消息：大声记录日志，让失败
+                # 可见、可以人工重试。
                 logger.exception(e)
                 logger.error(
                     "Error while handling the message added event %s — the "
@@ -237,8 +233,8 @@ class GmailInboxListener(BaseThread):
 
     def emit_message_deleted_event(self, message: models.Message):
         """
-        Emit the message deleted event to all the registered handlers.
-        :param message: the message to emit
+        向所有已注册的处理器发出邮件删除事件。
+        :param message: 要发出事件的邮件
         """
         logger.debug("Emitting the message deleted event %s", message.id)
         event = events.MessageDeletedEvent(self._service, message.id)

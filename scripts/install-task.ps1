@@ -1,7 +1,7 @@
-# Run the email assistant as a scheduled task (auto-restart on crash, at logon).
-# Usage (admin PowerShell):
-#   .\scripts\install-task.ps1            # install for current user
-#   .\scripts\install-task.ps1 -Remove    # uninstall
+# 把邮件助手注册为计划任务（崩溃自动重启，登录时自启）。
+# 用法（管理员 PowerShell）：
+#   .\scripts\install-task.ps1            # 为当前用户安装
+#   .\scripts\install-task.ps1 -Remove    # 卸载
 param(
     [switch]$Remove
 )
@@ -16,8 +16,8 @@ if ($Remove) {
     exit 0
 }
 
-# config.py loads HTTPS_PROXY from .env, so the task needs no proxy setup
-# here — only output redirection for diagnosis.
+# config.py 会从 .env 读取 HTTPS_PROXY，所以这里不需要给任务配置代理
+# ——只需要输出重定向以便诊断。
 $python = Join-Path $projectDir ".venv\Scripts\python.exe"
 if (-not (Test-Path $python)) {
     throw "Virtualenv not found at $python. Run 'uv sync' first."

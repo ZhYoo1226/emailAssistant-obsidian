@@ -40,7 +40,7 @@ class Message(BaseModel):
         return f"Message(id={self.id}, thread_id={self.thread_id}, snippet={self.snippet}, ...)"
 
     def get_header_value(self, name: str) -> str | None:
-        # payload is Optional and headers may be missing on exotic messages
+        # payload 是可选项，个别特殊邮件也可能缺少 headers
         if self.payload is None or not self.payload.headers:
             return None
         for header in self.payload.headers:

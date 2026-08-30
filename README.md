@@ -56,7 +56,17 @@ Two independent loops run side by side:
   re-ingested only if its content changed.
 - **Orphan cleanup** — on startup, chunks whose source file no longer exists in the vault are removed, so the
   vault is the single source of truth for Qdrant.
-- **Type filtering** — Excalidraw drawings and `.trash/` files are skipped (they are not prose notes).
+- **Type filtering** — Excalidraw drawings, `.trash/` and `.obsidian/` files are skipped by default
+  (they are not prose notes); the lists are plain `.env` entries you can edit.
+
+### Note-quality recommendation
+
+Prefer having a coding agent (Claude Code, Codex, OpenCode, Hermes, OpenClaw, DeepSeek harness, …) create and edit
+vault notes directly, instead of copy-pasting from chat windows. Manual pasting tends to introduce dirty data —
+session-scoped dead links such as `vscode-webview://...` and broken table pipes are typical. Those junk tokens end
+up in the sparse (BM25) vectors after jieba segmentation: dead-link hashes occupy vocabulary dimensions that no
+query will ever hit, diluting the sparse representation, and the real paths embedded inside them (which would
+otherwise be valuable for lexical retrieval) no longer match cleanly.
 
 ---
 
@@ -64,7 +74,7 @@ Two independent loops run side by side:
 
 - [CrewAI](https://www.crewai.com/) `1.15` — agent orchestration
 - [Qdrant](https://qdrant.tech/) — vector store / knowledge base, **hybrid search** (dense + sparse vectors fused by RRF, then cross-encoder rerank)
-- [fastembed](https://github.com/qdrant/fastembed) — local ONNX embeddings: `BAAI/bge-small-en-v1.5` (dense) + `Qdrant/bm25` over jieba tokens (sparse) + `BAAI/bge-reranker-base` (rerank)
+- [fastembed](https://github.com/qdrant/fastembed) — local ONNX embeddings: `BAAI/bge-small-zh-v1.5` (dense) + `Qdrant/bm25` over jieba tokens (sparse) + `BAAI/bge-reranker-base` (rerank)
 - [jieba](https://github.com/fxsjy/jieba) — Chinese word segmentation feeding the BM25 sparse path
 - An **OpenAI-compatible gateway** serving DeepSeek models (all LLM calls)
 - Gmail API (OAuth 2.0)
@@ -83,6 +93,8 @@ No GPU required. LLM inference goes through the gateway API; embeddings, sparse 
 - An OpenAI-compatible gateway URL + API key
 - Gmail API credentials (see below)
 
+> When using VSCode, open the `emailAssistant-obsidian` folder directly as the workspace; Pylance will then automatically apply the pyright configuration in `pyproject.toml`.
+
 ---
 
 ## Configuration
@@ -96,16 +108,25 @@ GATEWAY_API_KEY=YOUR_API_KEY
 GATEWAY_MAIN_MODEL=deepseek-v4-pro
 GATEWAY_FAST_MODEL=deepseek-v4-flash
 
-# Local embedding model (fastembed)
+# Local embedding models (fastembed)
 # Set HF_ENDPOINT=https://hf-mirror.com if Hugging Face is unreachable.
-EMBEDDING_MODEL_NAME=BAAI/bge-small-en-v1.5
+# Use bge-small-zh-v1.5 for Chinese-heavy vaults, bge-small-en-v1.5 for English.
+EMBEDDING_MODEL_NAME=BAAI/bge-small-zh-v1.5
+SPARSE_MODEL_NAME=Qdrant/bm25
+RERANKER_MODEL_NAME=BAAI/bge-reranker-base
 
 # Qdrant (local Docker needs no API key)
 QDRANT_LOCATION=http://localhost:6333
 QDRANT_API_KEY=
+QDRANT_COLLECTION_NAME=obsidian-notes
 
 # Obsidian vault path (the knowledge base source)
 OBSIDIAN_VAULT_PATH=/path/to/your/vault
+# Ingestion scope control: empty INCLUDE = all folders; EXCLUDE defaults
+# to the trash bin (.trash) and the app config dir (.obsidian); the
+# frontmatter key filter defaults to Excalidraw boards. All editable.
+OBSIDIAN_EXCLUDE_FOLDERS=.trash,.obsidian
+OBSIDIAN_EXCLUDE_FRONTMATTER=excalidraw-plugin
 
 # Proxy (required behind a firewall/GFW; loaded automatically at startup,
 # no shell export needed). Set the HTTP port of YOUR proxy software;
@@ -114,10 +135,12 @@ HTTPS_PROXY=http://127.0.0.1:7890
 
 # Optional tuning
 # Timeout (seconds) for every LLM call (default 180)
-LLM_TIMEOUT_SEC=180
+#LLM_TIMEOUT_SEC=180
+# Optional temperature override for the reply-writing agent
+#RESPONSE_TEMPERATURE=0.3
 # Comma-separated substrings of gateway models that reject tool_choice
 # (thinking-mode models). These fall back to JSON-mode structured output.
-NO_TOOL_CHOICE_MODELS=deepseek-v4,qwen3.8
+#NO_TOOL_CHOICE_MODELS=deepseek-v4,qwen3.8
 ```
 
 ### Gmail OAuth credentials
@@ -208,8 +231,9 @@ will be re-prompted roughly weekly — a Google limitation, not a bug.
 
 **Q: Excalidraw drawings / trash notes got into the knowledge base.**
 
-A: Both are filtered: Excalidraw `.md` files (detected via the `excalidraw-plugin` frontmatter) and `.trash/`
-files are skipped during ingestion.
+A: Both are filtered by default: Excalidraw `.md` files (detected via the `excalidraw-plugin`
+frontmatter) and the `.trash/` / `.obsidian/` folders are skipped during ingestion
+(see the `OBSIDIAN_EXCLUDE_*` settings in `.env`).
 
 **Q: Ingestion is slow.**
 

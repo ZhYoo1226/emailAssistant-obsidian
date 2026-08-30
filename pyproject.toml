@@ -42,6 +42,11 @@ select = ["E", "F", "W", "B", "I", "UP"]
 "config.py" = ["E402"]
 "main.py" = ["E402"]
 
+[tool.pyright]
+# 逻辑代码 `import config`（config.py 在项目根，运行时由 main.py 的
+# 脚本目录保证可导入）；extraPaths 让 Pylance 同样以根为导入根。
+extraPaths = ["."]
+
 [tool.uv]
 package = true
 

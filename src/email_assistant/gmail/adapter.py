@@ -1,6 +1,5 @@
 import base64
 import logging
-import os
 import time
 from collections.abc import Generator
 from email.mime.multipart import MIMEMultipart
@@ -16,6 +15,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import Resource, build
 from googleapiclient.errors import HttpError
 
+import config
 from email_assistant.gmail import models
 
 logger = logging.getLogger(__name__)
@@ -23,16 +23,15 @@ logger = logging.getLogger(__name__)
 
 class HistoryExpiredError(Exception):
     """
-    Raised when Gmail no longer retains history for the requested
-    startHistoryId (HTTP 404). The caller must fall back to a full rescan,
-    otherwise it would poll the expired ID forever and silently do nothing.
+    当 Gmail 不再保留所请求的 startHistoryId 的历史记录时抛出（HTTP 404）。
+    调用方必须回退到全量重扫，否则会永远轮询这个过期 ID 并静默地什么都不做。
     """
 
 
 class GmailServiceAdapter:
     """
-    An adapter over the Gmail API service to simplify the interactions with it and
-    use structured data classes instead of the raw JSON objects.
+    Gmail API 服务的外层适配器：简化与 API 的交互，用结构化的数据类
+    取代原始 JSON 对象。
     """
 
     CREDENTIALS_FILE_NAME = "credentials.json"
@@ -55,17 +54,14 @@ class GmailServiceAdapter:
 
     def is_authenticated(self) -> bool:
         """
-        Check if the user is authenticated in the Google API.
-        :return:
+        检查用户是否已通过 Google API 认证。
         """
         return self._service is not None
 
     def authenticate(self):
         """
-        Authenticate the user with the Gmail API. It should redirect the user to the
-        Google login page to authorize the application, if the user has not authorized
-        the application yet.
-        :return:
+        用 Gmail API 认证用户。如果用户尚未授权本应用，会重定向到
+        Google 登录页面进行授权。
         """
         token_file = self._credentials_dir / self.TOKEN_FILE_NAME
         if token_file.exists():
@@ -73,38 +69,38 @@ class GmailServiceAdapter:
                 str(token_file), self.GOOGLE_API_SCOPES
             )
 
-        # User has to log in, because we do not have valid _credentials
+        # 没有有效凭据，用户需要登录
         credentials_file = self._credentials_dir / self.CREDENTIALS_FILE_NAME
         if (
             self._credentials is not None
             and self._credentials.expired
             and self._credentials.refresh_token
         ):
-            # Access token expired but we still have a refresh token — refresh
-            # silently instead of prompting the user to re-authorize.
+            # 访问令牌已过期但还有刷新令牌——静默刷新，
+            # 而不是让用户重新授权。
             self._credentials.refresh(Request())
         elif self._credentials is None or not self._credentials.valid:
             flow = InstalledAppFlow.from_client_secrets_file(
                 str(credentials_file), self.GOOGLE_API_SCOPES
             )
-            # The stub types run_local_server as a union with
-            # external_account_authorized_user.Credentials, but an
-            # InstalledAppFlow always returns oauth2 Credentials.
+            # stub 把 run_local_server 的返回类型标注成了与
+            # external_account_authorized_user.Credentials 的联合类型，
+            # 但 InstalledAppFlow 返回的一定是 oauth2 的 Credentials。
             self._credentials = flow.run_local_server(port=0)  # pyright: ignore[reportAttributeAccessIssue]
         else:
             self._credentials.refresh(Request())
 
         assert self._credentials is not None
-        # Save the _credentials for the next run
+        # 保存凭据供下次运行使用
         with open(token_file, "w") as fp:
             fp.write(self._credentials.to_json())
 
-        # Connect to Gmail Service. httplib2 ignores HTTP(S)_PROXY env vars, so
-        # build the http object explicitly with the proxy when one is configured,
-        # otherwise requests to googleapis.com time out on firewalled networks.
+        # 连接 Gmail 服务。httplib2 会忽略 HTTP(S)_PROXY 环境变量，
+        # 所以配置了代理时要显式构建带代理的 http 对象，否则在防火墙
+        # 网络下对 googleapis.com 的请求会超时。
         import httplib2
 
-        proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+        proxy_url = config.https_proxy
         if proxy_url:
             from urllib.parse import urlparse
 
@@ -128,19 +124,18 @@ class GmailServiceAdapter:
 
     def _gmail(self) -> Any:
         """
-        The Gmail users() resource. googleapiclient's Resource is dynamically
-        generated — .users() doesn't exist in the stubs — so callers get Any.
+        Gmail 的 users() 资源。googleapiclient 的 Resource 是动态生成的
+        ——stub 里不存在 .users()——所以调用方拿到的是 Any。
         """
         assert self._service is not None
         return self._service.users()  # pyright: ignore[reportAttributeAccessIssue]
 
     def _execute_with_retry(self, request):
         """
-        Execute a Gmail API request, retrying on transient connection errors
-        (local proxy drop, WinError 10053, etc.) with backoff instead of
-        letting the exception kill the listener thread.
-        :param request: a zero-argument callable performing the API call
-        :return: the parsed response
+        执行一次 Gmail API 请求；遇到瞬时连接错误（本地代理断开、
+        WinError 10053 等）时退避重试，而不是让异常杀死监听线程。
+        :param request: 执行 API 调用的无参 callable
+        :return: 解析后的响应
         """
         while True:
             try:
@@ -156,10 +151,10 @@ class GmailServiceAdapter:
 
     def iter_unread_threads(self) -> Generator[models.Thread, None, None]:
         """
-        Iterate over all the unread threads in the Gmail Inbox.
-        :return: a generator of the unread threads
+        遍历 Gmail 收件箱中所有未读会话。
+        :return: 未读会话的生成器
         """
-        # Iterate over all the pages of the unread threads
+        # 分页遍历所有未读会话
         page_token = None
         while True:
             def _fetch_page(token=page_token):
@@ -182,11 +177,11 @@ class GmailServiceAdapter:
         self, last_history_id: int
     ) -> Generator[models.History, None, None]:
         """
-        Iterate over the history of the Gmail Inbox starting from the given history ID.
-        :param last_history_id: the history ID to start from
-        :return: a generator of the history objects
+        从给定的 history ID 开始遍历收件箱的历史记录。
+        :param last_history_id: 起始的 history ID
+        :return: 历史记录对象的生成器
         """
-        # Iterate over all the pages of the history
+        # 分页遍历所有历史记录
         page_token = None
         while True:
             try:
@@ -212,10 +207,9 @@ class GmailServiceAdapter:
                 logger.error("Timeout error occurred. Retrying...")
                 continue
             except HttpError as e:
-                # 404 means Gmail no longer retains history for the requested
-                # startHistoryId (history expires after roughly a week). Raise
-                # so the caller can fall back to a full rescan instead of
-                # silently polling an expired cursor forever.
+                # 404 表示 Gmail 不再保留所请求的 startHistoryId 的历史
+                # （历史大约一周后过期）。抛出异常让调用方回退到全量
+                # 重扫，而不是永远静默轮询一个过期游标。
                 if e.resp.status == 404:
                     raise HistoryExpiredError(
                         f"History for startHistoryId={last_history_id} has expired"
@@ -223,10 +217,9 @@ class GmailServiceAdapter:
                 logger.error("HTTP error occurred: %s", e)
                 return
             except (ConnectionError, OSError) as e:
-                # A local proxy or the network can drop an established
-                # connection mid-flight (e.g. WinError 10053). Back off and
-                # retry instead of letting the exception kill the polling
-                # thread for good.
+                # 本地代理或网络可能在请求中途断开已建立的连接
+                # （如 WinError 10053）。退避后重试，而不是让异常
+                # 永久杀死轮询线程。
                 logger.error(
                     "Connection error occurred: %s. Retrying in %ss...",
                     e,
@@ -237,9 +230,9 @@ class GmailServiceAdapter:
 
     def load_max_history_id(self) -> int | None:
         """
-        Load the maximum history ID from the Gmail service. It loads just the last
-        message and takes its history ID.
-        :return: the maximum history ID
+        从 Gmail 服务加载最大 history ID。只取最后一封邮件并读取其
+        history ID。
+        :return: 最大 history ID
         """
         messages = self._execute_with_retry(
             lambda: (
@@ -264,9 +257,9 @@ class GmailServiceAdapter:
 
     def load_full_thread(self, thread_id: str) -> models.Thread:
         """
-        Load the full thread from the Gmail service.
-        :param thread_id: the ID of the thread to load
-        :return: the full thread object
+        从 Gmail 服务加载完整会话。
+        :param thread_id: 要加载的会话 ID
+        :return: 完整的会话对象
         """
         full_thread = self._execute_with_retry(
             lambda: (
@@ -280,9 +273,9 @@ class GmailServiceAdapter:
 
     def load_full_message(self, message_id: str) -> models.Message:  # noqa: B019
         """
-        Load the full message from the Gmail service.
-        :param message_id: the ID of the message to load
-        :return: the full message object
+        从 Gmail 服务加载完整邮件。
+        :param message_id: 要加载的邮件 ID
+        :return: 完整的邮件对象
         """
         full_message = self._execute_with_retry(
             lambda: (
@@ -296,28 +289,22 @@ class GmailServiceAdapter:
 
     def decode_message(self, message: models.Message) -> models.DecodedMessage:
         """
-        Decode the message content from the base64 encoding.
-        :param message:
-        :return:
+        从 base64 编码中解码邮件内容。
         """
         content = self._extract_message_content(message)
         return models.DecodedMessage(message=message, content=content)
 
     def send_message(self, thread: models.Thread, content: str):
         """
-        Send a reply to the thread. It accepts the HTML content of the message,
-        converts it to plain text internally, and sends it (not a draft).
-        :param thread:
-        :param content:
-        :return:
+        向会话发送回复。接收邮件的 HTML 内容，内部转成纯文本，
+        然后直接发送（不是存草稿）。
         """
-        # Last message is used to get all the metadata
+        # 用最后一封邮件获取所有元数据
         last_message = thread.messages[-1]
 
-        # Idempotency guard: if this thread already contains a reply to the
-        # same message (matched via In-Reply-To), sending again would
-        # duplicate it. This covers handler redeliveries and retries after a
-        # connection dropped mid-send.
+        # 幂等保护：如果会话中已存在对同一封邮件（通过 In-Reply-To 匹配）
+        # 的回复，再发一次就会重复。这覆盖 handler 的重复投递和发送中途
+        # 断连后的重试场景。
         reply_to_id = last_message.get_header_value("Message-ID")
         if reply_to_id and self._thread_already_answered(thread, reply_to_id):
             logger.info(
@@ -326,8 +313,8 @@ class GmailServiceAdapter:
             )
             return
 
-        # Headers may be missing on exotic messages; without From/To we
-        # cannot build a valid reply, so skip instead of crashing.
+        # 个别特殊邮件可能缺少头字段；没有 From/To 就无法构建有效的
+        # 回复，跳过而不是崩溃。
         to_value = last_message.get_header_value("From")
         from_value = last_message.get_header_value("To")
         if not to_value or not from_value:
@@ -337,10 +324,10 @@ class GmailServiceAdapter:
             return
         subject = last_message.get_header_value("Subject") or ""
 
-        # Remove HTML to create a plain text version
+        # 去掉 HTML 生成纯文本版本
         plain_content = BeautifulSoup(content, "html.parser").get_text()
 
-        # Build the email message
+        # 构建邮件消息
         email_message = MIMEMultipart("alternative")
         email_message["To"] = self._parse_email(to_value)
         email_message["From"] = self._parse_email(from_value)
@@ -349,19 +336,18 @@ class GmailServiceAdapter:
             email_message["In-Reply-To"] = reply_to_id
             email_message["References"] = reply_to_id
 
-        # Create the plain and HTML parts
+        # 创建纯文本和 HTML 两个部分
         plain_part = MIMEText(plain_content, "plain")
         html_part = MIMEText(content, "html")
 
-        # Attach the parts to the email message
+        # 把两部分挂到邮件上
         email_message.attach(plain_part)
         email_message.attach(html_part)
 
-        # Send the message directly. Gmail threads it automatically via the
-        # In-Reply-To / References headers, so no threadId is needed here.
-        # A dropped connection (e.g. proxy hiccup) aborts the send mid-flight;
-        # retry a few times with backoff so a transient network blip doesn't
-        # silently lose the reply.
+        # 直接发送。Gmail 通过 In-Reply-To / References 头自动归并
+        # 会话，所以这里不需要 threadId。连接中断（如代理抖动）会
+        # 中途放弃发送；带退避地重试几次，避免瞬时网络抖动静默
+        # 丢失回复。
         raw = base64.urlsafe_b64encode(
             email_message.as_string().encode("utf-8")
         ).decode()
@@ -379,10 +365,9 @@ class GmailServiceAdapter:
                 return
             except (ConnectionError, OSError) as e:
                 last_error = e
-                # The previous attempt may have reached Gmail before the
-                # connection dropped. Reload the thread and check whether the
-                # reply was already delivered before retrying, to avoid
-                # sending it twice.
+                # 上一次尝试可能在断连之前已经到达 Gmail。重新加载
+                # 会话并检查回复是否已送达，再决定是否重试，
+                # 避免重复发送。
                 try:
                     fresh_thread = self.load_full_thread(thread.id)
                     if reply_to_id and self._thread_already_answered(
@@ -407,11 +392,11 @@ class GmailServiceAdapter:
 
     def _thread_already_answered(self, thread: models.Thread, message_id: str) -> bool:
         """
-        Check whether the thread already contains a message replying to the
-        given Message-ID (i.e. some message's In-Reply-To references it).
-        :param thread: the thread to inspect
-        :param message_id: the Message-ID of the message being replied to
-        :return: True if a reply already exists
+        检查会话中是否已存在针对给定 Message-ID 的回复
+        （即某封邮件的 In-Reply-To 引用了它）。
+        :param thread: 要检查的会话
+        :param message_id: 被回复邮件的 Message-ID
+        :return: 已存在回复则返回 True
         """
         for message in thread.messages:
             in_reply_to = message.get_header_value("In-Reply-To")
@@ -421,9 +406,7 @@ class GmailServiceAdapter:
 
     def _extract_message_content(self, message: models.Message) -> str:
         """
-        Extract the message content from the message object.
-        :param message:
-        :return:
+        从邮件对象中提取正文内容。
         """
         payload = message.payload
         if payload is None:
@@ -432,10 +415,10 @@ class GmailServiceAdapter:
         content: str | None = None
         charset: str = self.DEFAULT_CHARSET
         for mime_type in self.CONTENT_TYPE_PREFERRED:
-            # Convert to lowercase for comparison
+            # 统一转成小写再比较
             mime_type = mime_type.lower()
 
-            # If the body has data, use it
+            # body 里如果有数据就直接用
             if (
                 payload.mime_type.lower() == mime_type
                 and payload.body.data
@@ -445,11 +428,11 @@ class GmailServiceAdapter:
                 logger.debug(f"Found {mime_type} body with charset {charset}")
                 break
 
-            # Some messages have no parts, so we need to check if the parts exist
+            # 有些邮件没有 parts，所以要先确认 parts 是否存在
             if not payload.parts:
                 continue
 
-            # If the body has no data, check the parts, but first flatten the list of parts
+            # body 没有数据时检查各部分，先把嵌套的 parts 拍平成一个列表
             flatten_parts = self._flatten_message_parts(message)
             for part in flatten_parts:
                 if not part.mime_type.lower() == mime_type:
@@ -461,27 +444,25 @@ class GmailServiceAdapter:
                 )
                 break
 
-            # If content found, break the loop
+            # 找到内容就跳出循环
             if content:
                 break
 
-        # If no text body found, raise an error
+        # 没有找到文本正文则报错
         if content is None:
             raise ValueError("No text body found.")
 
-        # Content is base64-encoded, decode it
+        # 内容是 base64 编码的，先解码
         base64_decoded = base64.urlsafe_b64decode(content)
         try:
             return base64_decoded.decode(charset)
         except LookupError:
-            # Fallback to default if the charset is not found
+            # 找不到该字符集时退回默认值
             return base64_decoded.decode(self.DEFAULT_CHARSET)
 
     def _load_full_history(self, history_descriptor: dict) -> models.History:
         """
-        Parse the history descriptor and load the full history object out of it.
-        :param history_descriptor:
-        :return:
+        解析 history 描述符并加载完整的 history 对象。
         """
         if "messagesAdded" in history_descriptor:
             messages_added = []
@@ -499,9 +480,7 @@ class GmailServiceAdapter:
         self, message: models.Message
     ) -> list[models.MessagePart]:
         """
-        Flatten the list of message parts into a single list.
-        :param message:
-        :return:
+        把邮件的嵌套 parts 拍平成单个列表。
         """
         if message.payload is None:
             return []
@@ -512,7 +491,7 @@ class GmailServiceAdapter:
 
     def _flatten_parts(self, part: models.MessagePart) -> list[models.MessagePart]:
         """
-        Flatten the inner parts of the message part.
+        把单个 part 内部嵌套的 parts 拍平成单个列表。
         :param part:
         :return:
         """
@@ -523,7 +502,7 @@ class GmailServiceAdapter:
 
     def _extract_content_charset(self, part: models.MessagePart) -> str:
         """
-        Extract the charset from the Content-Type header.
+        从 Content-Type 头中提取字符集。
         :param part:
         :return:
         """
@@ -549,9 +528,8 @@ class GmailServiceAdapter:
 
     def _parse_email(self, text: str) -> str:
         """
-        Parse the email content from the formatted text like
-        '"John Done" <johndone@email.com>', so it only returns the email address.
-        If the text is already an email address, it returns it.
+        从形如 '"John Done" <johndone@email.com>' 的格式化文本中解析出
+        邮件地址，只返回邮箱部分。如果传入的已经是邮件地址，则原样返回。
         :param text:
         :return:
         """

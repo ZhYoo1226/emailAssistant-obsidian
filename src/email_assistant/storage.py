@@ -3,24 +3,23 @@ from typing import Any
 
 from qdrant_client import QdrantClient, models
 
-# Named vectors in the collection: dense = bge-small semantic vector,
-# sparse = BM25 lexical vector (jieba-presegmented). Hybrid search fuses
-# both via RRF, then the caller reranks the fused candidates.
+# 集合中的命名向量：dense = bge-small 语义向量，
+# sparse = BM25 词法向量（jieba 预分词）。混合检索用 RRF 融合两者，
+# 再由调用方对融合后的候选结果重排。
 DENSE_VECTOR_NAME = "dense"
 SPARSE_VECTOR_NAME = "sparse"
 
-# RRF fusion tuning, applied in QdrantStorage.query_points. k is the rank
-# dampening constant from the RRF paper (smaller k favors top ranks more);
-# weights balance the two retrieval paths — [dense, sparse] order.
+# RRF 融合调参，在 QdrantStorage.query_points 中生效。k 是 RRF 论文中
+# 的排名衰减常数（k 越小越偏向头部排名）；weights 平衡两条检索路径
+# ——顺序为 [dense, sparse]。
 RRF_K = 2
 RRF_WEIGHTS = [1.0, 1.0]
 
 
 class QdrantStorage:
     """
-    Storage for knowledge base entries in Qdrant, embedded with the project's
-    local fastembed model. Standalone class: crewai>=1.15 no longer ships
-    crewai.memory.storage.rag_storage.
+    Qdrant 中知识库条目的存储，用项目的本地 fastembed 模型做嵌入。
+    独立类：crewai>=1.15 不再自带 crewai.memory.storage.rag_storage。
     """
 
     TEST_STRING = "test"
@@ -38,8 +37,8 @@ class QdrantStorage:
         reranker: Any | None = None,
     ):
         self.type = type
-        # The project passes config.embedder_config, a dict with the callable
-        # EmbeddingFunction under the "provider" key (see config.py).
+        # 项目传入的是 config.embedder_config，一个把可调用的
+        # EmbeddingFunction 放在 "provider" 键下的 dict（见 config.py）。
         assert embedder_config is not None
         self.embedder_config = embedder_config["provider"]
         self.sparse_embedder = sparse_embedder
@@ -54,14 +53,13 @@ class QdrantStorage:
         limit: int = 3,
         filter: dict | None = None,
     ) -> list[dict]:
-        # Hybrid retrieval: two parallel prefetch paths (dense + sparse)
-        # fused by RRF, then a cross-encoder rerank of the fused candidates.
-        # No score threshold — RRF scores are rank-based, not cosine
-        # similarities, so a threshold tuned for dense scores is meaningless.
+        # 混合检索：两条并行预取路径（dense + sparse）经 RRF 融合，
+        # 再对融合后的候选做交叉编码器重排。不设分数阈值——RRF 分数
+        # 基于排名而非余弦相似度，为 dense 分数调的阈值没有意义。
         query = self._normalize_text(query)
         query_filter = self._to_qdrant_filter(filter)
 
-        # Reranking happens on `rerank_limit` candidates, then top `limit` win.
+        # 重排发生在 rerank_limit 个候选上，然后取前 limit 个。
         rerank_limit = max(limit * 4, 20) if self.reranker else limit
 
         if self.sparse_embedder is not None:
@@ -123,23 +121,22 @@ class QdrantStorage:
         self.app.delete_collection(self.type)
 
     def save(self, value: str, metadata: dict[str, Any]) -> None:
-        """Save a single entry (see save_batch for the actual logic)."""
+        """保存单条条目（实际逻辑见 save_batch）。"""
         self.save_batch([(value, metadata)])
     def save_batch(self, entries: list[tuple[str, dict[str, Any]]]) -> None:
         """
-        Save multiple entries in one go: a single embedding call for all the
-        values and a single Qdrant upsert. Much faster than per-chunk round
-        trips, especially against a remote (Cloud) Qdrant.
-        :param entries: list of (value, metadata) tuples
+        一次性保存多条条目：所有文本做一次嵌入调用、一次 Qdrant upsert。
+        比逐 chunk 往返快得多，尤其是对远程（Cloud）Qdrant。
+        :param entries: (value, metadata) 元组列表
         """
         if not entries:
             return
 
-        # Limit the document length to avoid it being too large for the model
+        # 限制文档长度，避免超出模型的承受范围
         values = [self._normalize_text(value) for value, _ in entries]
         metadatas = [metadata for _, metadata in entries]
 
-        # Embed all the texts at once
+        # 一次性嵌入所有文本
         embeddings = self.embedder_config(values)
         vectors: list[dict[str, Any]] = [
             {DENSE_VECTOR_NAME: embedding} for embedding in embeddings
@@ -152,7 +149,7 @@ class QdrantStorage:
                     values=embedding.values.tolist(),
                 )
 
-        # Upsert all the points in a single request
+        # 单个请求 upsert 所有点
         self.app.upsert(
             self.type,
             points=[
@@ -192,9 +189,9 @@ class QdrantStorage:
 
     def get_metadata_value(self, filter: dict, key: str) -> Any | None:
         """
-        Return the value of a metadata key from the first point matching the
-        filter, or None if no point matches. Used to read per-file bookkeeping
-        fields (e.g. total_chunks) without scrolling the whole collection.
+        返回第一个匹配过滤器的点的指定 metadata 键的值，没有匹配点则
+        返回 None。用于读取文件级的簿记字段（如 total_chunks），不必
+        遍历整个集合。
         """
         points, _ = self.app.scroll(
             collection_name=self.type,
@@ -210,8 +207,7 @@ class QdrantStorage:
 
     def list_src_paths(self) -> set[str]:
         """
-        Return the set of distinct ``src_path`` values currently stored in the
-        collection, by scrolling through all points.
+        通过遍历所有点，返回集合中当前存储的不同 ``src_path`` 值的集合。
         """
         paths: set[str] = set()
         offset = None
@@ -233,14 +229,14 @@ class QdrantStorage:
         return paths
 
     def _initialize_app(self) -> QdrantClient:
-        # Initialize the Qdrant client and create the collection if it doesn't exist
+        # 初始化 Qdrant 客户端，集合不存在则创建
         client = QdrantClient(self._qdrant_location, api_key=self._qdrant_api_key)
         if not client.collection_exists(self.type):
-            # Create an embedding for a dummy value to get the embedding dimensionality
+            # 用一个哑值生成嵌入，以获得嵌入维度
             embedding = self.embedder_config([self.TEST_STRING])[0]
 
-            # Always use named vectors, even dense-only: save_batch and
-            # search address the dense vector by DENSE_VECTOR_NAME.
+            # 即使只有 dense 也始终使用命名向量：save_batch 和 search
+            # 都通过 DENSE_VECTOR_NAME 寻址 dense 向量。
             vectors_config: models.VectorsConfig = {
                 DENSE_VECTOR_NAME: models.VectorParams(
                     size=len(embedding),
@@ -249,8 +245,7 @@ class QdrantStorage:
             }
             sparse_vectors_config = None
             if self.sparse_embedder is not None:
-                # IDF modifier downweights high-frequency terms, improving BM25
-                # discrimination on Chinese text.
+                # IDF 修饰符给高频词降权，提升 BM25 在中文文本上的区分度。
                 sparse_vectors_config = {
                     SPARSE_VECTOR_NAME: models.SparseVectorParams(
                         index=models.SparseIndexParams(),
@@ -258,14 +253,14 @@ class QdrantStorage:
                     )
                 }
 
-            # Create Qdrant collection with dense (and optionally sparse) vectors
+            # 创建带 dense（以及可选 sparse）向量的 Qdrant 集合
             client.create_collection(
                 collection_name=self.type,
                 vectors_config=vectors_config,
                 sparse_vectors_config=sparse_vectors_config,
             )
 
-            # Create payload indexes for the fields used in filters
+            # 为过滤器用到的字段创建 payload 索引
             for field in (
                 "metadata.src_path",
                 "metadata.content_hash",
@@ -279,9 +274,9 @@ class QdrantStorage:
                     ),
                 )
         elif self.sparse_embedder is not None:
-            # Guard against pre-hybrid collections: upserting hybrid points
-            # into a dense-only collection fails server-side with a confusing
-            # error, so fail fast with an actionable message instead.
+            # 防护混合检索之前创建的集合：向 dense-only 集合 upsert 混合
+            # 点会在服务端报出令人困惑的错误，所以在这里快速失败并给出
+            # 可操作的提示。
             existing = client.get_collection(self.type).config.params.sparse_vectors
             if SPARSE_VECTOR_NAME not in (existing or {}):
                 raise RuntimeError(
@@ -293,7 +288,7 @@ class QdrantStorage:
 
     def _normalize_text(self, text: str) -> str:
         """
-        Normalize the text to be within the maximum length.
+        把文本归一化到最大长度以内。
         :param text:
         :return:
         """
@@ -301,14 +296,14 @@ class QdrantStorage:
         if len(encoded) <= self.MAX_LENGTH_BYTES:
             return text
 
-        # Truncate to the byte limit. Decoding with errors="ignore" drops any
-        # trailing partial multi-byte character rather than raising.
+        # 按字节上限截断。errors="ignore" 解码会丢弃末尾不完整的多字节
+        # 字符，而不是抛异常。
         truncated = encoded[: self.MAX_LENGTH_BYTES]
         return truncated.decode("utf-8", errors="ignore")
 
     def _to_qdrant_filter(self, filter: dict | None) -> models.Filter | None:
         """
-        Convert dictionary filter to Qdrant filter. For now only supports exact match.
+        把 dict 过滤器转换成 Qdrant 过滤器。目前只支持精确匹配。
         :param filter:
         :return:
         """

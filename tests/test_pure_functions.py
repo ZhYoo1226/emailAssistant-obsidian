@@ -1,9 +1,11 @@
-"""Unit tests for pure functions — no network, no LLM, no Qdrant."""
+"""纯函数的单元测试——不涉及网络、LLM、Qdrant。"""
 
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+PROJECT_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from email_assistant import models  # noqa: E402
 from email_assistant.gmail.handlers import AgenticAutoReplyHandler  # noqa: E402
@@ -19,8 +21,8 @@ def _folder_handler(
     exclude: list[str] | None = None,
     exclude_frontmatter: list[str] | None = None,
 ) -> AgenticObsidianVaultToQdrantHandler:
-    # Bypass __init__ (which builds a crew + Qdrant client); the folder logic
-    # only needs the attributes set below.
+    # 绕过 __init__（它会构建 crew + Qdrant 客户端）；文件夹逻辑只需要
+    # 下面这些属性。
     handler = AgenticObsidianVaultToQdrantHandler.__new__(
         AgenticObsidianVaultToQdrantHandler
     )
@@ -61,15 +63,14 @@ class TestStripCitationMarkers:
         assert self.strip(None) is None
 
     def test_all_markers_stripped_falls_back_to_original(self):
-        # If stripping would produce empty output, return the original instead
-        # of sending an empty email.
+        # 如果剥掉标记后输出为空，则返回原文，而不是发送空邮件。
         assert self.strip("[来源1]") == "[来源1]"
 
 
 class TestNormalizePath:
-    """AgenticAutoReplyHandler._verify_sources compares model-emitted paths
-    against Qdrant-stored paths via its inner _normalize(). Model output can
-    be JSON-escaped (D:\\Self\\...) or posix-style (D:/Self/...)."""
+    """AgenticAutoReplyHandler._verify_sources 通过内部的 _normalize()
+    把模型输出的路径与 Qdrant 中存储的路径做比较。模型输出可能是
+    JSON 转义的（D:\\Self\\...）或 posix 风格的（D:/Self/...）。"""
 
     @staticmethod
     def normalize(path: str) -> str:
@@ -121,7 +122,7 @@ class TestNormalizeText:
 
     def test_multibyte_truncation_no_crash(self):
         storage = QdrantStorage.__new__(QdrantStorage)
-        # 3-byte CJK chars; cut mid-character must not raise
+        # 3 字节的 CJK 字符；截断在字符中间也不能抛异常
         text = "汉" * 5000
         result = storage._normalize_text(text)
         assert len(result.encode("utf-8")) <= QdrantStorage.MAX_LENGTH_BYTES
@@ -130,8 +131,8 @@ class TestNormalizeText:
 
 class TestEmailResponseModel:
     def test_schema_descriptions_have_no_citation_marker_instructions(self):
-        # The schema descriptions are sent to the model via instructor; they
-        # must not ask for [来源N] markers in the recipient-visible content.
+        # schema 描述会经由 instructor 发给模型；它们不能要求在收件人
+        # 可见的内容里带 [来源N] 标记。
         import json
 
         schema = json.dumps(models.EmailResponse.model_json_schema())
@@ -185,16 +186,17 @@ class TestInScope:
         handler = _folder_handler()
         assert handler._in_scope("D:/vault/任意文件夹/a.md") is True
 
-    def test_trash_folder_always_excluded_via_config_default(self):
-        # config.py folds ".trash" into the exclude set; on_created no
-        # longer has a separate hardcoded trash check.
-        handler = _folder_handler(exclude=[".trash"])
+    def test_special_folders_excluded_via_config(self):
+        # .trash / .obsidian 等特殊文件夹没有内置排除逻辑，完全靠
+        # .env 里的 OBSIDIAN_EXCLUDE_FOLDERS 配置生效。
+        handler = _folder_handler(exclude=[".trash", ".obsidian"])
         assert handler._in_scope("D:/vault/.trash/a.md") is False
+        assert handler._in_scope("D:/vault/.obsidian/a.md") is False
 
 
 class TestExcludeFrontmatter:
-    # on_created skips a file when the configured exclude keys intersect the
-    # note's frontmatter keys (e.g. Excalidraw's excalidraw-plugin).
+    # 当配置的排除键与笔记的 frontmatter 键有交集时（如 Excalidraw 的
+    # excalidraw-plugin），on_created 会跳过该文件。
     @staticmethod
     def excluded(handler, frontmatter: dict) -> bool:
         return bool(handler._exclude_frontmatter & frontmatter.keys())

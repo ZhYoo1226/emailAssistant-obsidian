@@ -1,26 +1,25 @@
 import os
 
-import jieba
-from chromadb import EmbeddingFunction
 from dotenv import load_dotenv
-from fastembed import SparseTextEmbedding, TextEmbedding
-from fastembed.rerank.cross_encoder import TextCrossEncoder
 
-# Load dotenv file
+# 加载 .env 文件（写入进程的环境变量里，在os.environ.get之前）
 load_dotenv(".env")
 
-# The proxy needed to reach Google/Qdrant Cloud must be set before any client
-# library builds its connection, so it lives here rather than in the shell.
-# Set HTTPS_PROXY in .env (or delete the line on networks that don't need it).
-_os_proxy = os.environ.get("HTTPS_PROXY")
-if _os_proxy:
-    os.environ.setdefault("HTTP_PROXY", _os_proxy)
+# 本文件是所有配置的唯一定义者：环境变量只在这里读取，其余模块一律
+# `import config` 取值，不再直接碰 os.environ。
+
+# 出网代理。访问 Google/Qdrant Cloud 需要它在任何客户端库建立连接
+# 之前就绪，所以放这里而不是 shell 里。在 .env 中设置 HTTPS_PROXY
+# （不需要代理的网络环境可直接删掉这一行）。
+https_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+if https_proxy:
+    os.environ.setdefault("HTTP_PROXY", https_proxy)
 
 # ---------------------------------------------------------------------------
-# LLM gateway configuration (OpenAI-compatible)
+# LLM 网关配置（OpenAI 兼容）
 #
-# The gateway exposes DeepSeek models over an OpenAI-compatible API. CrewAI
-# (via LiteLLM) resolves "openai/<model>" using OPENAI_BASE_URL / OPENAI_API_KEY.
+# 网关通过 OpenAI 兼容 API 暴露 DeepSeek 系列模型。CrewAI（经由 LiteLLM）
+# 用 OPENAI_BASE_URL / OPENAI_API_KEY 来解析 "openai/<model>"。
 # ---------------------------------------------------------------------------
 gateway_base_url = os.environ.get("GATEWAY_BASE_URL", "https://api.upmore.net/v1")
 gateway_api_key = (
@@ -29,94 +28,61 @@ gateway_api_key = (
     or os.environ.get("OPENAI_API_KEY")
 )
 
-# Expose the gateway to LiteLLM so "openai/<model>" strings are routed correctly.
-# NOTE: LiteLLM 1.x reads OPENAI_API_BASE (not OPENAI_BASE_URL) for the OpenAI
-# provider, so we set both.
+# 把网关暴露给 LiteLLM，"openai/<model>" 字符串才能正确路由。
+# 注意：LiteLLM 1.x 的 OpenAI provider 读取的是 OPENAI_API_BASE（而非
+# OPENAI_BASE_URL），所以两个都设置。
 os.environ.setdefault("OPENAI_API_BASE", gateway_base_url)
 os.environ.setdefault("OPENAI_BASE_URL", gateway_base_url)
 if gateway_api_key:
     os.environ.setdefault("OPENAI_API_KEY", gateway_api_key)
 
-# Model names served by the gateway.
+# 网关提供的模型名。
 gateway_main_model = os.environ.get("GATEWAY_MAIN_MODEL", "deepseek-v4-pro")
 gateway_fast_model = os.environ.get("GATEWAY_FAST_MODEL", "deepseek-v4-flash")
 
-# ---------------------------------------------------------------------------
-# Embedder configuration (local, via fastembed)
-#
-# fastembed runs embedding models locally over ONNX, so no external embedding
-# API is needed. The model is downloaded on first use; set HF_ENDPOINT to a
-# mirror if Hugging Face is unreachable from your network.
-# ---------------------------------------------------------------------------
-embedding_model_name = os.environ.get(
-    "EMBEDDING_MODEL_NAME", "BAAI/bge-small-en-v1.5"
+# 每次 LLM 调用的超时（秒），防止挂起的网关连接把邮件处理或摄取流程
+# 永久阻塞。DeepSeek 思考型模型 legitimately 可能较慢，所以给得宽裕。
+LLM_TIMEOUT_SEC = int(os.environ.get("LLM_TIMEOUT_SEC", "180"))
+
+# 回复写作 agent 的可选 temperature 覆盖（调试幻觉问题时用）。
+# 不设置则使用模型默认值。
+response_temperature = (
+    float(os.environ["RESPONSE_TEMPERATURE"])
+    if os.environ.get("RESPONSE_TEMPERATURE")
+    else None
 )
 
-# Sparse (lexical) model for hybrid search; the cross-encoder reranks the
-# fused candidates. Both run locally via fastembed ONNX, CPU-only.
-sparse_model_name = "Qdrant/bm25"
-reranker_model_name = "BAAI/bge-reranker-base"
+# 拒绝 tool_choice 的网关模型（思考型），逗号分隔的子串匹配。命中的
+# 模型回退到 JSON 模式的结构化输出（见文件末尾的补丁）；未列出的模型
+# （如 glm-5.3）保持原生函数调用不变。
+NO_TOOL_CHOICE_MODELS = os.environ.get(
+    "NO_TOOL_CHOICE_MODELS", "deepseek-v4,qwen3.8"
+)
 
+# ---------------------------------------------------------------------------
+# 嵌入模型配置（本地，基于 fastembed）
+#
+# fastembed 通过 ONNX 在本地跑嵌入模型，不需要外部嵌入 API。模型在首次
+# 使用时下载；如果网络访问不了 Hugging Face，可设置 HF_ENDPOINT 指向镜像。
+#
+# 只定义模型名——实例化在 main.py（组装处）完成，避免 import config 时
+# 就加载 ONNX 模型。
+# ---------------------------------------------------------------------------
+embedding_model_name = os.environ.get(
+    "EMBEDDING_MODEL_NAME", "BAAI/bge-small-zh-v1.5"
+)
 
-class FastEmbedFunction(EmbeddingFunction):
-    """A chromadb-compatible EmbeddingFunction backed by a local fastembed model."""
+# 稀疏（词法）模型用于混合检索；交叉编码器对融合后的候选结果重排。
+# 两者都通过 fastembed ONNX 在本地运行，仅用 CPU。
+sparse_model_name = os.environ.get("SPARSE_MODEL_NAME", "Qdrant/bm25")
+reranker_model_name = os.environ.get("RERANKER_MODEL_NAME", "BAAI/bge-reranker-base")
 
-    def __init__(self, model_name: str):
-        self.model_name = model_name
-        self._model = TextEmbedding(model_name=model_name)
-
-    def name(self) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]
-        return f"fastembed/{self.model_name}"
-
-    def __call__(self, input):
-        if isinstance(input, str):
-            input = [input]
-        return [vector.tolist() for vector in self._model.embed(input)]
-
-
-class JiebaBM25Function:
-    """
-    Sparse embedding for Chinese text: jieba segments the text into
-    space-separated tokens, then fastembed's BM25 converts them into sparse
-    vectors. Without pre-segmentation BM25 falls back to whitespace
-    tokenization, which collapses a Chinese sentence into 1-2 tokens.
-    """
-
-    def __init__(self, model_name: str = sparse_model_name):
-        self.model_name = model_name
-        self._model = SparseTextEmbedding(model_name=model_name)
-
-    @staticmethod
-    def _segment(texts: list[str]) -> list[str]:
-        return [" ".join(jieba.cut_for_search(text)) for text in texts]
-
-    def embed(self, texts: list[str]):
-        return list(self._model.embed(self._segment(texts)))
-
-
-class BgeRerankFunction:
-    """Cross-encoder reranker over (query, candidate) pairs, scored locally."""
-
-    def __init__(self, model_name: str = reranker_model_name):
-        self.model_name = model_name
-        self._model = TextCrossEncoder(model_name=model_name)
-
-    def rerank(self, query: str, documents: list[str]) -> list[float]:
-        return [float(score) for score in self._model.rerank(query, documents)]
-
-
-# CrewAI's EmbeddingConfigurator accepts an EmbeddingFunction instance directly
-# when it is placed under the "provider" key.
-embedder_config = {"provider": FastEmbedFunction(embedding_model_name)}
-sparse_embedder = JiebaBM25Function()
-reranker = BgeRerankFunction()
-
-# Qdrant configuration
+# Qdrant 配置
 qdrant_location = os.environ.get("QDRANT_LOCATION", "http://localhost:6333")
 qdrant_api_key = os.environ.get("QDRANT_API_KEY") or None
-qdrant_collection_name = "obsidian-notes"
+qdrant_collection_name = os.environ.get("QDRANT_COLLECTION_NAME", "obsidian-notes")
 
-# Obsidian configuration
+# Obsidian 配置
 obsidian_vault_path = os.environ.get("OBSIDIAN_VAULT_PATH")
 
 
@@ -124,47 +90,45 @@ def _parse_folder_list(raw: str | None) -> list[str]:
     return [name.strip() for name in (raw or "").split(",") if name.strip()]
 
 
-# Restrict ingestion by top-level vault folder (comma-separated names). Empty
-# include list = every folder; exclude then removes from that set. Obsidian's
-# trash folder is always excluded — it holds deleted notes, not knowledge.
+# 按仓库顶层文件夹（逗号分隔的名称）限制摄取范围。include 列表为空表示
+# 全部文件夹；exclude 再从这个集合中剔除。排除哪些文件夹完全由 .env
+# 决定，这里不做任何内置——典型条目如 .trash（Obsidian 回收站）和
+# .obsidian（程序配置目录）。
 obsidian_include_folders = _parse_folder_list(
     os.environ.get("OBSIDIAN_INCLUDE_FOLDERS")
 )
 obsidian_exclude_folders = sorted(
-    {".trash"}
-    | set(_parse_folder_list(os.environ.get("OBSIDIAN_EXCLUDE_FOLDERS")))
+    set(_parse_folder_list(os.environ.get("OBSIDIAN_EXCLUDE_FOLDERS")))
 )
 
-# Skip notes whose frontmatter contains any of these keys (comma-separated).
-# Excalidraw drawings store compressed base64 blobs, not prose, and would
-# blow up the LLM request.
+# 跳过 frontmatter 中含有以下任一键（逗号分隔）的笔记。典型条目如
+# excalidraw-plugin：Excalidraw 画板存的是压缩的 base64 数据而非正文，
+# 会把 LLM 请求撑爆。同样完全由 .env 提供，不设内置默认。
 obsidian_exclude_frontmatter = _parse_folder_list(
-    os.environ.get("OBSIDIAN_EXCLUDE_FRONTMATTER", "excalidraw-plugin")
+    os.environ.get("OBSIDIAN_EXCLUDE_FRONTMATTER")
 )
 
-# AgentOps configuration
+# AgentOps 可观测性（留空 = 关闭）
 agentops_api_key = os.environ.get("AGENTOPS_API_KEY") or None
 
 # ---------------------------------------------------------------------------
-# Workaround patches for the OpenAI-compatible gateway models.
+# 针对 OpenAI 兼容网关模型的补丁（workaround）。
 #
-# crewai 1.15's litellm path has two gaps for us:
-#   1. InternalInstructor (used for Task.output_pydantic) does not forward
-#      the LLM instance's timeout, so a hung gateway call blocks forever.
-#   2. Thinking-mode models (e.g. deepseek-v4) reject tool_choice; crewai
-#      still sends structured-output requests through instructor's default
-#      TOOLS mode, which the gateway refuses.
+# crewai 1.15 的 litellm 链路对我们有两个缺口：
+#   1. InternalInstructor（用于 Task.output_pydantic）不转发 LLM 实例的
+#      timeout，网关连接一旦挂起就会永久阻塞。
+#   2. 思考型模型（如 deepseek-v4）拒绝 tool_choice；而 crewai 仍会把
+#      结构化输出请求走 instructor 默认的 TOOLS 模式，被网关拒绝。
 #
-# Patches applied below:
-#   1. supports_function_calling -> False for thinking-mode models, forcing
-#      the text (non-native) tool calling path for agents with tools.
-#   2. InternalInstructor always gets a timeout-injected litellm client;
-#      thinking-mode models additionally get instructor MD_JSON mode, which
-#      extracts JSON from the reply text instead of sending tool_choice.
+# 下面应用的补丁：
+#   1. 思考型模型的 supports_function_calling -> False，强制带工具的
+#      agent 走文本（非原生）工具调用路径。
+#   2. InternalInstructor 始终拿到注入了 timeout 的 litellm client；
+#      思考型模型额外使用 instructor MD_JSON 模式——从回复文本中提取
+#      JSON，而不是发送 tool_choice。
 #
-# The thinking-mode model list is configurable: comma-separated substrings
-# matched against the model name. Models not listed (e.g. glm-5.3) keep
-# native function calling untouched.
+# 补丁用到的 NO_TOOL_CHOICE_MODELS / LLM_TIMEOUT_SEC 已在上方网关配置
+# 一节定义。
 # ---------------------------------------------------------------------------
 import functools
 
@@ -174,12 +138,6 @@ from crewai.utilities.internal_instructor import (
     InternalInstructor as _InternalInstructor,
 )
 from litellm import completion as _litellm_completion
-
-LLM_TIMEOUT_SEC = int(os.environ.get("LLM_TIMEOUT_SEC", "180"))
-
-NO_TOOL_CHOICE_MODELS = os.environ.get(
-    "NO_TOOL_CHOICE_MODELS", "deepseek-v4,qwen3.8"
-)
 
 
 def _rejects_tool_choice(model: str) -> bool:
@@ -198,15 +156,16 @@ def _supports_function_calling(self) -> bool:
         return False
     return _original_supports_function_calling(self)
 
-
+# 设置function_calling的值为true或者false
 _CrewAILLM.supports_function_calling = _supports_function_calling
 
+# 内部构造器的init
 _original_ii_init = _InternalInstructor.__init__
 
 
 def _ii_init(self, content, model, agent=None, llm=None):
     _original_ii_init(self, content, model, agent=agent, llm=llm)
-    if not getattr(self.llm, "is_litellm", False):
+    if not getattr(self.llm, "is_litellm", False):  # self指的是internal_instructor
         return
     kwargs = {}
     if _rejects_tool_choice(getattr(self.llm, "model", "") or ""):

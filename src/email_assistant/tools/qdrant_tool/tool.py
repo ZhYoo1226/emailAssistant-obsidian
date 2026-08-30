@@ -49,9 +49,8 @@ class QdrantHybridSearchTool(BaseTool):
             query, limit=5, filter=({"folder": folder} if folder else None)
         )
         if not results and folder:
-            # The folder filter may be wrong (model-invented name) or the
-            # folder may genuinely lack the answer; fall back to all folders
-            # rather than returning nothing.
+            # 文件夹过滤器可能不对（模型编造的名字），也可能该文件夹
+            # 确实没有答案；回退到全部文件夹，而不是返回空结果。
             logger.warning(
                 "No results in folder '%s'; retrying without the folder filter.",
                 folder,

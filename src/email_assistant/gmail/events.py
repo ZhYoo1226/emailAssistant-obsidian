@@ -6,7 +6,7 @@ from email_assistant.gmail.adapter import GmailServiceAdapter
 
 class BaseGmailEvent(abc.ABC):  # noqa: B024 — marker base class; subclassing is what matters
     """
-    A base class for all the events happening in the Gmail Inbox.
+    Gmail 收件箱中所有事件的基类。
     """
 
     def __init__(self, gmail_service: GmailServiceAdapter):
@@ -18,7 +18,7 @@ class BaseGmailEvent(abc.ABC):  # noqa: B024 — marker base class; subclassing 
 
 class MessageAddedEvent(BaseGmailEvent):
     """
-    An event that occurs when a new message is added to the Gmail Inbox.
+    新邮件到达 Gmail 收件箱时触发的事件。
     """
 
     def __init__(self, gmail_service: GmailServiceAdapter, message: models.Message):
@@ -31,7 +31,7 @@ class MessageAddedEvent(BaseGmailEvent):
 
 class MessageDeletedEvent(BaseGmailEvent):
     """
-    An event that occurs when a message is deleted from the Gmail Inbox.
+    邮件从 Gmail 收件箱中删除时触发的事件。
     """
 
     def __init__(self, gmail_service: GmailServiceAdapter, message_id: str):
