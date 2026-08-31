@@ -3,6 +3,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -158,6 +160,7 @@ class TestTopLevelFolder:
         handler._vault_root = None
         assert handler._top_level_folder("D:/vault/实习经历/abc.md") is None
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="反斜杠只在 Windows 才是路径分隔符")
     def test_windows_separator_path(self):
         handler = _folder_handler()
         assert handler._top_level_folder("D:\\vault\\学习情况\\a.md") == "学习情况"

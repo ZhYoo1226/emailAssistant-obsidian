@@ -32,6 +32,13 @@ class GmailInboxState(BaseModel):
         ),
     )
     last_history_id: int | None = None
+    failed_message_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "处理失败、待重试的邮件 ID。失败不阻塞水位线推进，由 "
+            "_retry_failed_messages 独立重试，避免整段 history 重放造成重复回复。"
+        ),
+    )
 
     def update_last_history_id(self, new_history_id: int) -> bool:
         """
@@ -129,13 +136,16 @@ class GmailInboxListener(BaseThread):
         for counter, unread_thread in enumerate(
             self._service.iter_unread_threads()
         ):
-            # 更新最后的 history ID，避免重复处理同样的会话
-            self._state.update_last_history_id(int(unread_thread.history_id))
             if not unread_thread.messages:
                 continue
 
-            # 只对会话中的最后一封邮件发出事件
-            self.emit_message_added_event(unread_thread.messages[-1])
+            # 只对会话中的最后一封邮件发出事件；失败则记入失败队列，由
+            # _retry_failed_messages 独立重试。水位线照常推进，不阻塞重扫。
+            if not self.emit_message_added_event(unread_thread.messages[-1]):
+                self._state.failed_message_ids.append(
+                    unread_thread.messages[-1].id
+                )
+            self._state.update_last_history_id(int(unread_thread.history_id))
             if counter % 100 == 99:
                 logger.info("Processed %i unread threads", counter + 1)
             self._save_state_if_due()
@@ -147,6 +157,31 @@ class GmailInboxListener(BaseThread):
         self._state.process_all_unread_threads = False
         self._save_state_if_due(force=True)
 
+    def _retry_failed_messages(self) -> None:
+        """
+        重试失败队列里的邮件。成功则从队列移除；仍失败或邮件拉取失败则
+        保留，下轮继续重试。失败每次都会大声记日志，方便人工发现需要
+        干预的坏邮件（例如内容永远触发 LLM 报错）。
+        """
+        if not self._state.failed_message_ids:
+            return
+        remaining: list[str] = []
+        for message_id in list(self._state.failed_message_ids):
+            try:
+                message = self._service.load_full_message(message_id)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "Failed to reload message %s for retry, will retry later: %s",
+                    message_id,
+                    e,
+                )
+                remaining.append(message_id)
+                continue
+            if not self.emit_message_added_event(message):
+                remaining.append(message_id)
+        self._state.failed_message_ids = remaining
+        self._save_state_if_due(force=True)
+
     def run(self) -> None:
         """
         启动监听器，运行监听 Gmail 收件箱新事件的循环。
@@ -155,6 +190,9 @@ class GmailInboxListener(BaseThread):
             self._process_unread_threads()
 
         while True:
+            # 先重试上次失败的邮件，再拉取新的历史
+            self._retry_failed_messages()
+
             # 还没有最后的 history ID 时，从 Google Gmail 服务取当前
             # 最大的一个，从这里开始处理
             if self._state.last_history_id is None:
@@ -173,16 +211,19 @@ class GmailInboxListener(BaseThread):
                     self._state.last_history_id
                 )
                 for counter, history in enumerate(history_generator):
-                    # 更新最后的 history ID，避免重复处理同样的历史
-                    self._state.update_last_history_id(int(history.id))
-
-                    # 遍历新增邮件并调用处理器
+                    # 处理该 history 里的邮件：失败的不阻塞水位线，而是记入
+                    # 失败队列，由 _retry_failed_messages 独立重试。水位线
+                    # 照常推进，避免整段 history 重放造成重复回复。
                     for message_added in history.messages_added:
-                        self.emit_message_added_event(message_added.message)
-
-                    # 遍历删除邮件并调用处理器
+                        if not self.emit_message_added_event(message_added.message):
+                            self._state.failed_message_ids.append(
+                                message_added.message.id
+                            )
                     for message_deleted in history.messages_deleted:
                         self.emit_message_deleted_event(message_deleted.message)
+
+                    # 无论成败，水位线照常推进（失败的在队列里单独重试）
+                    self._state.update_last_history_id(int(history.id))
 
                     if counter % 100 == 99:
                         logger.info("Processed %i history events", counter + 1)
@@ -211,13 +252,16 @@ class GmailInboxListener(BaseThread):
         """
         return self._state
 
-    def emit_message_added_event(self, message: models.Message):
+    def emit_message_added_event(self, message: models.Message) -> bool:
         """
-        向所有已注册的处理器发出邮件新增事件。
+        向所有已注册的处理器发出邮件新增事件。全部成功返回 True；任一
+        处理器失败返回 False（失败已记录日志，调用方据此决定是否推进
+        水位线，避免邮件被静默丢弃）。
         :param message: 要发出事件的邮件
         """
         logger.debug("Emitting the message added event %s", message)
         event = events.MessageAddedEvent(self._service, message)
+        success = True
         for handler in self._handlers:
             try:
                 handler.on_message_added(event)
@@ -230,14 +274,18 @@ class GmailInboxListener(BaseThread):
                     "message was NOT processed successfully",
                     message.id,
                 )
+                success = False
+        return success
 
-    def emit_message_deleted_event(self, message: models.Message):
+    def emit_message_deleted_event(self, message: models.Message) -> bool:
         """
-        向所有已注册的处理器发出邮件删除事件。
+        向所有已注册的处理器发出邮件删除事件。全部成功返回 True；任一
+        处理器失败返回 False。
         :param message: 要发出事件的邮件
         """
         logger.debug("Emitting the message deleted event %s", message.id)
         event = events.MessageDeletedEvent(self._service, message.id)
+        success = True
         for handler in self._handlers:
             try:
                 handler.on_message_deleted(event)
@@ -246,3 +294,5 @@ class GmailInboxListener(BaseThread):
                     "Error while handling the message deleted event: %s", event
                 )
                 logger.exception(e)
+                success = False
+        return success

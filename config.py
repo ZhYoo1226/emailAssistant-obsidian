@@ -56,7 +56,7 @@ response_temperature = (
 # 模型回退到 JSON 模式的结构化输出（见文件末尾的补丁）；未列出的模型
 # （如 glm-5.3）保持原生函数调用不变。
 NO_TOOL_CHOICE_MODELS = os.environ.get(
-    "NO_TOOL_CHOICE_MODELS", "deepseek-v4,qwen3.8"
+    "NO_TOOL_CHOICE_MODELS", "deepseek-v4,qwen3.8,kimi-k2,kimi-k3"
 )
 
 # ---------------------------------------------------------------------------

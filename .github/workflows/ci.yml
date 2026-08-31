@@ -22,5 +22,5 @@ jobs:
       - name: Lint (ruff)
         run: uv run ruff check src tests config.py main.py
 
-      - name: Unit tests (pytest)
+      - name: Unit tests (pytest + coverage)
         run: uv run pytest tests/ -q

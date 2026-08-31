@@ -133,6 +133,13 @@ OBSIDIAN_EXCLUDE_FRONTMATTER=excalidraw-plugin
 # delete or comment out on unrestricted networks.
 HTTPS_PROXY=http://127.0.0.1:7890
 
+# Disable CrewAI's built-in trace upload (no calls to app.crewai.com). Keep
+# false for unattended/automated runs. Note: on a fresh machine CrewAI still
+# shows a one-time "view your execution traces?" prompt (its first-run consent
+# flow, unrelated to this flag) — run `crewai traces disable` once to suppress
+# that prompt too.
+CREWAI_TRACING_ENABLED=false
+
 # Optional tuning
 # Timeout (seconds) for every LLM call (default 180)
 #LLM_TIMEOUT_SEC=180
@@ -194,10 +201,17 @@ Start-ScheduledTask -TaskName EmailAssistant
 
 ```bash
 uv run ruff check src tests config.py main.py   # lint
-uv run pytest tests/ -q                          # unit tests
+uv run pytest tests/ -q                          # unit tests + coverage
 ```
 
 Both also run automatically in GitHub Actions CI (see the **Actions** tab) on every push and pull request.
+
+### Code review (Claude Code)
+
+A project-scoped [code-review skill](.claude/skills/code-review/SKILL.md) codifies the review workflow
+for this codebase. Ask Claude Code to review a change and it loads this skill, checking project-specific
+failure modes (Gmail `historyId` at-least-once, CrewAI ReAct loop caps, byte-level truncation, …) on top
+of the usual correctness / security / concurrency pass.
 
 ---
 
@@ -265,3 +279,19 @@ A: Replies go through multiple verification layers before being sent:
 
 A: No. Sources are recorded internally for verification but never shown to the recipient. Any
 citation markers that leak into the generated text are stripped before sending.
+
+**Q: First run hangs on a "Would you like to view your execution traces? [y/N] (20s timeout)" prompt.**
+
+A: That is CrewAI's built-in first-run tracing consent prompt (not AgentOps). On a fresh machine it
+blocks 20 seconds waiting for terminal input, and the prompt text lingers because CrewAI never cancels
+its input thread. It happens only once — the choice is recorded in `.crewai_user.json`. For a fully
+automated setup, run `crewai traces disable` once (and keep `CREWAI_TRACING_ENABLED=false` in `.env`)
+so it never prompts and never uploads.
+
+**Q: What happens if an email fails to process (e.g., the LLM returns an error)?**
+
+A: The email is not lost. Its ID is recorded in a failure queue (persisted in `gmail_inbox_state.json`)
+and retried automatically on the next poll. The `historyId` cursor still advances normally, so a failed
+email never blocks or duplicates the rest. The one tradeoff: an email that fails every time (e.g., its
+content always breaks the pipeline) keeps being retried once per minute and stays visible in the logs —
+that is the signal to fix the underlying cause.

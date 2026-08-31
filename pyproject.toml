@@ -22,6 +22,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pytest-cov>=6.0.0",
     "ruff>=0.8.6",
 ]
 
@@ -46,6 +47,12 @@ select = ["E", "F", "W", "B", "I", "UP"]
 # 逻辑代码 `import config`（config.py 在项目根，运行时由 main.py 的
 # 脚本目录保证可导入）；extraPaths 让 Pylance 同样以根为导入根。
 extraPaths = ["."]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# 覆盖率默认开启：本地和 CI 跑 pytest 都会顺带输出覆盖率。
+# 未设 fail_under —— 目前只有纯函数被测试，整体覆盖率偏低，先只报告不拦截。
+addopts = "--cov=email_assistant --cov-report=term-missing"
 
 [tool.uv]
 package = true

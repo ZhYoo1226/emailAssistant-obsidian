@@ -119,6 +119,12 @@ OBSIDIAN_EXCLUDE_FRONTMATTER=excalidraw-plugin
 # 端口改成你代理软件的 HTTP 端口；网络环境不需要代理时删掉或注释这行
 HTTPS_PROXY=http://127.0.0.1:7890
 
+# 关闭 CrewAI 内置 trace 上传（不再访问 app.crewai.com）。全自动/无人值守
+# 运行请保持 false。注意：全新机器上 CrewAI 仍会弹一次「查看执行 trace？」
+# 提示（它的首次同意机制，与此开关无关）——额外执行一次
+# `crewai traces disable` 即可连这个提示也一并关掉。
+CREWAI_TRACING_ENABLED=false
+
 # 可选调优
 # 每次 LLM 调用的超时（秒，默认 180）
 #LLM_TIMEOUT_SEC=180
@@ -179,10 +185,17 @@ Start-ScheduledTask -TaskName EmailAssistant
 
 ```bash
 uv run ruff check src tests config.py main.py   # 代码检查
-uv run pytest tests/ -q                          # 单元测试
+uv run pytest tests/ -q                          # 单元测试 + 覆盖率
 ```
 
 每次 push 和 pull request 时，GitHub Actions CI 也会自动跑这两步（见仓库的 **Actions** 标签页）。
+
+### 代码审查（Claude Code）
+
+仓库内置了一个项目级的 [code-review skill](.claude/skills/code-review/SKILL.md)，把本项目的审查
+流程固化了下来。让 Claude Code 审查改动时它会加载这个 skill，在常规的正确性 / 安全 / 并发检查
+之外，额外核查本项目特有的坑（Gmail `historyId` 的 at-least-once、CrewAI ReAct 循环上限、
+字节级截断等）。
 
 ---
 
@@ -238,3 +251,13 @@ A：回复在发送前要过几层校验：
 **Q：回复里会出现 [来源1] 或 [1] 这样的引用标记吗？**
 
 A：不会。来源只作为内部校验依据记录，不会展示给收件人。即使生成文本中漏出了引用标记，发送前也会被自动清除。
+
+**Q：首次运行卡在「Would you like to view your execution traces? [y/N] (20s timeout)」提示？**
+
+A：这是 CrewAI 自带的首次运行追踪同意提示（不是 AgentOps）。全新机器上它会等 20 秒终端输入，且提示文字会残留（CrewAI 不会取消它的输入线程）。它只出现一次——选择会被记录进 `.crewai_user.json`。要做成全自动，执行一次 `crewai traces disable`（并在 `.env` 里保持 `CREWAI_TRACING_ENABLED=false`），之后既不弹提示也不上传。
+
+**Q：某封邮件处理失败（比如 LLM 报错）会怎样？**
+
+A：邮件不会丢。它的 ID 会记入失败队列（持久化在 `gmail_inbox_state.json`），下一轮轮询自动重试。
+`historyId` 游标照常推进，所以失败的邮件不会阻塞、也不会让后面的邮件重复处理。唯一代价：一封每次
+都失败的邮件（比如内容永远触发报错）会每分钟重试一次并持续出现在日志里——这正是提醒你去修根因的信号。
