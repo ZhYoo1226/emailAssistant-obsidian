@@ -18,10 +18,10 @@ if https_proxy:
 # ---------------------------------------------------------------------------
 # LLM 网关配置（OpenAI 兼容）
 #
-# 网关通过 OpenAI 兼容 API 暴露 DeepSeek 系列模型。CrewAI（经由 LiteLLM）
-# 用 OPENAI_BASE_URL / OPENAI_API_KEY 来解析 "openai/<model>"。
+# 网关通过 OpenAI 兼容 API 暴露 glm / DeepSeek / Qwen 等模型。CrewAI（经由
+# LiteLLM）用 OPENAI_BASE_URL / OPENAI_API_KEY 来解析 "openai/<model>"。
 # ---------------------------------------------------------------------------
-gateway_base_url = os.environ.get("GATEWAY_BASE_URL", "https://api.upmore.net/v1")
+gateway_base_url = os.environ["GATEWAY_BASE_URL"]
 gateway_api_key = (
     os.environ.get("GATEWAY_API_KEY")
     or os.environ.get("ANTHROPIC_AUTH_TOKEN")
@@ -37,12 +37,12 @@ if gateway_api_key:
     os.environ.setdefault("OPENAI_API_KEY", gateway_api_key)
 
 # 网关提供的模型名。
-gateway_main_model = os.environ.get("GATEWAY_MAIN_MODEL", "deepseek-v4-pro")
-gateway_fast_model = os.environ.get("GATEWAY_FAST_MODEL", "deepseek-v4-flash")
+gateway_main_model = os.environ["GATEWAY_MAIN_MODEL"]
+gateway_fast_model = os.environ["GATEWAY_FAST_MODEL"]
 
 # 每次 LLM 调用的超时（秒），防止挂起的网关连接把邮件处理或摄取流程
-# 永久阻塞。DeepSeek 思考型模型 legitimately 可能较慢，所以给得宽裕。
-LLM_TIMEOUT_SEC = int(os.environ.get("LLM_TIMEOUT_SEC", "180"))
+# 永久阻塞。思考型模型 legitimately 可能较慢，所以给得宽裕。
+LLM_TIMEOUT_SEC = int(os.environ["LLM_TIMEOUT_SEC"])
 
 # 回复写作 agent 的可选 temperature 覆盖（调试幻觉问题时用）。
 # 不设置则使用模型默认值。
@@ -66,22 +66,20 @@ NO_TOOL_CHOICE_MODELS = os.environ["NO_TOOL_CHOICE_MODELS"]
 # 只定义模型名——实例化在 main.py（组装处）完成，避免 import config 时
 # 就加载 ONNX 模型。
 # ---------------------------------------------------------------------------
-embedding_model_name = os.environ.get(
-    "EMBEDDING_MODEL_NAME", "BAAI/bge-small-zh-v1.5"
-)
+embedding_model_name = os.environ["EMBEDDING_MODEL_NAME"]
 
 # 稀疏（词法）模型用于混合检索；交叉编码器对融合后的候选结果重排。
 # 两者都通过 fastembed ONNX 在本地运行，仅用 CPU。
-sparse_model_name = os.environ.get("SPARSE_MODEL_NAME", "Qdrant/bm25")
-reranker_model_name = os.environ.get("RERANKER_MODEL_NAME", "BAAI/bge-reranker-base")
+sparse_model_name = os.environ["SPARSE_MODEL_NAME"]
+reranker_model_name = os.environ["RERANKER_MODEL_NAME"]
 
 # Qdrant 配置
-qdrant_location = os.environ.get("QDRANT_LOCATION", "http://localhost:6333")
+qdrant_location = os.environ["QDRANT_LOCATION"]
 qdrant_api_key = os.environ.get("QDRANT_API_KEY") or None
-qdrant_collection_name = os.environ.get("QDRANT_COLLECTION_NAME", "obsidian-notes")
+qdrant_collection_name = os.environ["QDRANT_COLLECTION_NAME"]
 
 # Obsidian 配置
-obsidian_vault_path = os.environ.get("OBSIDIAN_VAULT_PATH")
+obsidian_vault_path = os.environ["OBSIDIAN_VAULT_PATH"]
 
 
 def _parse_folder_list(raw: str | None) -> list[str]:
