@@ -55,9 +55,7 @@ response_temperature = (
 # 拒绝 tool_choice 的网关模型（思考型），逗号分隔的子串匹配。命中的
 # 模型回退到 JSON 模式的结构化输出（见文件末尾的补丁）；未列出的模型
 # （如 glm-5.3）保持原生函数调用不变。
-NO_TOOL_CHOICE_MODELS = os.environ.get(
-    "NO_TOOL_CHOICE_MODELS", "deepseek-v4,qwen3.8,kimi-k2,kimi-k3"
-)
+NO_TOOL_CHOICE_MODELS = os.environ["NO_TOOL_CHOICE_MODELS"]
 
 # ---------------------------------------------------------------------------
 # 嵌入模型配置（本地，基于 fastembed）
