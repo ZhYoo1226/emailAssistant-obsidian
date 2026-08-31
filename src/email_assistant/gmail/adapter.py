@@ -344,10 +344,11 @@ class GmailServiceAdapter:
         email_message.attach(plain_part)
         email_message.attach(html_part)
 
-        # 直接发送。Gmail 通过 In-Reply-To / References 头自动归并
-        # 会话，所以这里不需要 threadId。连接中断（如代理抖动）会
-        # 中途放弃发送；带退避地重试几次，避免瞬时网络抖动静默
-        # 丢失回复。
+        # 直接发送。显式携带 threadId 强制归并进原会话——仅靠
+        # In-Reply-To/References 头 Gmail 并不总能归并（对 QQ 邮箱发来的
+        # 邮件实测会散成新线程），而归并失效会让幂等检查（在原线程里找
+        # 回复）永远查不到已发过的回复。连接中断（如代理抖动）会中途
+        # 放弃发送；带退避地重试几次，避免瞬时网络抖动静默丢失回复。
         raw = base64.urlsafe_b64encode(
             email_message.as_string().encode("utf-8")
         ).decode()
@@ -358,7 +359,10 @@ class GmailServiceAdapter:
                 sent = (
                     self._gmail()
                     .messages()
-                    .send(userId="me", body={"raw": raw})
+                    .send(
+                        userId="me",
+                        body={"raw": raw, "threadId": thread.id},
+                    )
                     .execute()
                 )
                 logger.info("Sent a reply message: %s", sent)
@@ -389,6 +393,26 @@ class GmailServiceAdapter:
                 time.sleep(delay)
         assert last_error is not None
         raise last_error
+
+    def mark_message_read(self, message_id: str) -> None:
+        """
+        把邮件标记为已读（移除 UNREAD 标签）。回复发出后调用，否则
+        来信在 Gmail 眼里永远未读，任何一次全量重扫未读会话都会把
+        旧邮件再翻出来回复一遍。
+        :param message_id: 要标记的邮件 ID
+        """
+        self._execute_with_retry(
+            lambda: (
+                self._gmail()
+                .messages()
+                .modify(
+                    userId="me",
+                    id=message_id,
+                    body={"removeLabelIds": ["UNREAD"]},
+                )
+                .execute()
+            )
+        )
 
     def _thread_already_answered(self, thread: models.Thread, message_id: str) -> bool:
         """

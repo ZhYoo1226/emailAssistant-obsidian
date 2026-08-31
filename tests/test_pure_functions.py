@@ -111,6 +111,39 @@ class TestUpdateLastHistoryId:
         assert state.last_history_id == 200
 
 
+class TestProcessedMessageIds:
+    """Gmail history 会把同一封邮件的 messageAdded 事件重复投递，
+    监听器必须按邮件 ID 去重，否则一封来信会被回复多次。"""
+
+    def test_first_mark(self):
+        state = GmailInboxState()
+        assert state.mark_message_processed("msg1") is True
+        assert state.is_message_processed("msg1") is True
+
+    def test_duplicate_rejected(self):
+        state = GmailInboxState()
+        state.mark_message_processed("msg1")
+        assert state.mark_message_processed("msg1") is False
+
+    def test_unrelated_message_not_affected(self):
+        state = GmailInboxState()
+        state.mark_message_processed("msg1")
+        assert state.is_message_processed("msg2") is False
+
+    def test_survives_roundtrip(self):
+        # 状态要能持久化到磁盘再加载，去重记录不能丢
+        import tempfile
+
+        state = GmailInboxState()
+        state.mark_message_processed("msg1")
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = Path(f.name)
+        state.save(path)
+        loaded = GmailInboxState.load_state(path)
+        assert loaded.is_message_processed("msg1") is True
+        path.unlink()
+
+
 class TestNormalizeText:
     def test_short_text_untouched(self):
         storage = QdrantStorage.__new__(QdrantStorage)

@@ -39,6 +39,13 @@ class GmailInboxState(BaseModel):
             "_retry_failed_messages 独立重试，避免整段 history 重放造成重复回复。"
         ),
     )
+    processed_message_ids: set[str] = Field(
+        default_factory=set,
+        description=(
+            "已成功处理过的邮件 ID。Gmail history 会把同一封邮件的 "
+            "messageAdded 事件重复投递，按 ID 去重防止同一封来信被回复多次。"
+        ),
+    )
 
     def update_last_history_id(self, new_history_id: int) -> bool:
         """
@@ -50,6 +57,21 @@ class GmailInboxState(BaseModel):
             self.last_history_id = new_history_id
             return True
         return False
+
+    def mark_message_processed(self, message_id: str) -> bool:
+        """
+        把邮件标记为已处理。首次标记返回 True；重复标记（同一 ID 之前
+        已处理过）返回 False，调用方据此跳过，防止重复回复。
+        :param message_id: 邮件 ID
+        :return: 首次标记返回 True，重复返回 False
+        """
+        if message_id in self.processed_message_ids:
+            return False
+        self.processed_message_ids.add(message_id)
+        return True
+
+    def is_message_processed(self, message_id: str) -> bool:
+        return message_id in self.processed_message_ids
 
     @classmethod
     def load_state(cls, path: Path) -> "GmailInboxState":
@@ -141,10 +163,11 @@ class GmailInboxListener(BaseThread):
 
             # 只对会话中的最后一封邮件发出事件；失败则记入失败队列，由
             # _retry_failed_messages 独立重试。水位线照常推进，不阻塞重扫。
-            if not self.emit_message_added_event(unread_thread.messages[-1]):
-                self._state.failed_message_ids.append(
-                    unread_thread.messages[-1].id
-                )
+            last = unread_thread.messages[-1]
+            if self._state.mark_message_processed(last.id):
+                if not self.emit_message_added_event(last):
+                    self._state.failed_message_ids.append(last.id)
+                    self._state.processed_message_ids.discard(last.id)
             self._state.update_last_history_id(int(unread_thread.history_id))
             if counter % 100 == 99:
                 logger.info("Processed %i unread threads", counter + 1)
@@ -211,14 +234,17 @@ class GmailInboxListener(BaseThread):
                     self._state.last_history_id
                 )
                 for counter, history in enumerate(history_generator):
-                    # 处理该 history 里的邮件：失败的不阻塞水位线，而是记入
-                    # 失败队列，由 _retry_failed_messages 独立重试。水位线
-                    # 照常推进，避免整段 history 重放造成重复回复。
+                    # 处理该 history 里的邮件：Gmail 会重复投递同一封邮件的
+                    # messageAdded 事件，按邮件 ID 去重；处理失败的记入失败
+                    # 队列独立重试，水位线照常推进，避免整段 history 重放
+                    # 造成重复回复。
                     for message_added in history.messages_added:
-                        if not self.emit_message_added_event(message_added.message):
-                            self._state.failed_message_ids.append(
-                                message_added.message.id
-                            )
+                        msg = message_added.message
+                        if not self._state.mark_message_processed(msg.id):
+                            continue
+                        if not self.emit_message_added_event(msg):
+                            self._state.failed_message_ids.append(msg.id)
+                            self._state.processed_message_ids.discard(msg.id)
                     for message_deleted in history.messages_deleted:
                         self.emit_message_deleted_event(message_deleted.message)
 

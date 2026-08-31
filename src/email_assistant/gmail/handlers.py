@@ -132,12 +132,14 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
             service.send_message(
                 thread, content=self._fallback_reply(last_message.snippet)
             )
+            service.mark_message_read(message.id)
             return
         if not self._verify_faithfulness(email_response):
             logger.warning("Response not faithful to sources. Sending fallback reply.")
             service.send_message(
                 thread, content=self._fallback_reply(last_message.snippet)
             )
+            service.mark_message_read(message.id)
             return
 
         if NO_RESPONSE_SENTINEL in (email_response.content or ""):
@@ -147,12 +149,16 @@ class AgenticAutoReplyHandler(GmailInboxEventHandler):
             service.send_message(
                 thread, content=self._fallback_reply(last_message.snippet)
             )
+            service.mark_message_read(message.id)
             return
 
         service.send_message(
             thread,
             content=self._strip_citation_markers(email_response.content) or "",
         )
+        # 回复已发出：把来信标记为已读，避免下次全量重扫未读会话时
+        # 把同一封旧邮件再回复一遍。
+        service.mark_message_read(message.id)
 
     @staticmethod
     def _strip_citation_markers(content: str | None) -> str | None:
