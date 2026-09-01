@@ -143,6 +143,42 @@ class TestProcessedMessageIds:
         assert loaded.is_message_processed("msg1") is True
         path.unlink()
 
+    def test_remark_after_discard(self):
+        # 失败路径会 discard 已处理标记（允许重试）；重试成功后必须能
+        # 重新 mark（返回 True），否则 history 重复投递会绕过去重。
+        state = GmailInboxState()
+        state.mark_message_processed("msg1")
+        state.processed_message_ids.discard("msg1")
+        assert state.mark_message_processed("msg1") is True
+
+
+class TestTrimProcessedMessageIds:
+    """已处理集合只增不减会让状态文件无限膨胀，必须裁剪到上限。"""
+
+    @staticmethod
+    def trim(state: "GmailInboxState") -> None:
+        # 直接实例化监听器会连带 GmailServiceAdapter 初始化；
+        # 绕过 __init__ 挂上 _state 即可只测裁剪逻辑本身。
+        from email_assistant.gmail.inbox import GmailInboxListener
+
+        listener = object.__new__(GmailInboxListener)
+        listener._state = state
+        listener._trim_processed_message_ids()
+
+    def test_under_limit_untouched(self):
+        state = GmailInboxState()
+        state.processed_message_ids = {"msg1"}
+        self.trim(state)
+        assert state.processed_message_ids == {"msg1"}
+
+    def test_over_limit_trimmed(self):
+        from email_assistant.gmail.inbox import PROCESSED_IDS_MAX
+
+        state = GmailInboxState()
+        state.processed_message_ids = {f"msg{i}" for i in range(PROCESSED_IDS_MAX + 500)}
+        self.trim(state)
+        assert len(state.processed_message_ids) == PROCESSED_IDS_MAX
+
 
 class TestNormalizeText:
     def test_short_text_untouched(self):

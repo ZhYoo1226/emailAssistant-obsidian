@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 # 优雅关闭以来的游标进度。
 STATE_SAVE_INTERVAL_SEC = 60
 
+# 已处理邮件 ID 去重集合的大小上限。Gmail messageAdded 重复投递发生在
+# 数分钟尺度上，保留最近 10000 条远超该窗口；同时防止状态文件无限膨胀。
+PROCESSED_IDS_MAX = 10_000
+
 
 class GmailInboxState(BaseModel):
     """
@@ -182,9 +186,11 @@ class GmailInboxListener(BaseThread):
 
     def _retry_failed_messages(self) -> None:
         """
-        重试失败队列里的邮件。成功则从队列移除；仍失败或邮件拉取失败则
-        保留，下轮继续重试。失败每次都会大声记日志，方便人工发现需要
-        干预的坏邮件（例如内容永远触发 LLM 报错）。
+        重试失败队列里的邮件。成功则从队列移除并回填已处理标记
+        （失败时被 discard 过，不回填的话后续 history 重复投递同一封
+        邮件会绕过去重再回一遍）；仍失败或邮件拉取失败则保留，下轮
+        继续重试。失败每次都会大声记日志，方便人工发现需要干预的坏
+        邮件（例如内容永远触发 LLM 报错）。
         """
         if not self._state.failed_message_ids:
             return
@@ -200,10 +206,27 @@ class GmailInboxListener(BaseThread):
                 )
                 remaining.append(message_id)
                 continue
-            if not self.emit_message_added_event(message):
+            if self.emit_message_added_event(message):
+                self._state.mark_message_processed(message_id)
+            else:
                 remaining.append(message_id)
         self._state.failed_message_ids = remaining
+        self._trim_processed_message_ids()
         self._save_state_if_due(force=True)
+
+    def _trim_processed_message_ids(self) -> None:
+        """
+        已处理集合只增不减会让状态文件无限膨胀。裁剪到上限（保留最近
+        的，丢弃最早的）——去重窗口因此有限，但水位线天然不再重放久远
+        的 history，两者叠加后正常路径不会触达被裁掉的旧 ID。
+        """
+        if len(self._state.processed_message_ids) <= PROCESSED_IDS_MAX:
+            return
+        excess = len(self._state.processed_message_ids) - PROCESSED_IDS_MAX
+        # set 无序，丢弃任意 excess 个即可：去重只关心「在不在」，
+        # 不需要精确到「哪一批」。
+        for message_id in list(self._state.processed_message_ids)[:excess]:
+            self._state.processed_message_ids.discard(message_id)
 
     def run(self) -> None:
         """
