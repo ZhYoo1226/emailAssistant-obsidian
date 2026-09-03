@@ -83,6 +83,7 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         include_folders: list[str] | None = None,
         exclude_folders: list[str] | None = None,
         exclude_frontmatter: list[str] | None = None,
+        orphan_protect_folders: list[str] | None = None,
     ):
         # CrewBase 的 TYPE_CHECKING stub 把 __init__ 标注为
         # (*args, **kwargs)，向 pyright 隐藏了 BaseCrew 真实的
@@ -100,6 +101,9 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         self._include_folders = set(include_folders or [])
         self._exclude_folders = set(exclude_folders or [])
         self._exclude_frontmatter = set(exclude_frontmatter or [])
+        # 共库保护：这些 metadata.folder 下的点不归本 handler 管理，
+        # 孤儿清理直接跳过（由 .env 的 ORPHAN_PROTECT_FOLDERS 提供）。
+        self._orphan_protect_folders = set(orphan_protect_folders or [])
         self._last_modified_at: dict[str, float] = {}
 
     def _top_level_folder(self, src_path: str) -> str | None:
@@ -187,11 +191,17 @@ class AgenticObsidianVaultToQdrantHandler(FileSystemEventHandler):
         """
         移除 src_path 已不存在于仓库中、或已不在配置文件夹范围内的点，
         这样应用停止期间的删除和范围变更会在下次启动时反映出来。
+
+        受保护 folder（self._orphan_protect_folders）的点不属于本仓库
+        摄取范围，不参与孤儿判定，绝不会被清理。
         """
         vault_paths = {
             str(p) for p in vault_md_files if self._in_scope(str(p))
         }
-        for path in self.knowledge_base.list_src_paths() - vault_paths:
+        stored_paths = self.knowledge_base.list_src_paths(
+            exclude_folders=sorted(self._orphan_protect_folders)
+        )
+        for path in stored_paths - vault_paths:
             logger.info("Removing orphaned entries for deleted file: %s", path)
             self.knowledge_base.delete({"src_path": path})
 

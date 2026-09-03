@@ -104,6 +104,15 @@ obsidian_exclude_frontmatter = _parse_folder_list(
     os.environ.get("OBSIDIAN_EXCLUDE_FRONTMATTER")
 )
 
+# 共库保护：这个 collection 里不属于本仓库摄取范围的 folder（逗号分隔
+# 的 metadata.folder 值）。这些 folder 下的点由其他系统管理（例如
+# Hermes 用户画像的 user-profile），孤儿清理与范围过滤一律跳过它们，
+# 只管理自己摄取的点。留空 = 不保护任何 folder（独占 collection 的
+# 传统行为）。增删保护对象只改 .env，不动代码。
+orphan_protect_folders = _parse_folder_list(
+    os.environ.get("ORPHAN_PROTECT_FOLDERS")
+)
+
 # AgentOps 可观测性（留空 = 关闭）
 agentops_api_key = os.environ.get("AGENTOPS_API_KEY") or None
 

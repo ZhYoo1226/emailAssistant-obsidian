@@ -205,23 +205,49 @@ class QdrantStorage:
         metadata = (points[0].payload or {}).get("metadata") or {}
         return metadata.get(key)
 
-    def list_src_paths(self) -> set[str]:
+    def list_src_paths(
+        self, exclude_folders: list[str] | None = None
+    ) -> set[str]:
         """
         通过遍历所有点，返回集合中当前存储的不同 ``src_path`` 值的集合。
+
+        ``exclude_folders``：跳过 ``metadata.folder`` 命中其中任一值的点
+        （共库场景下由其他系统管理的 folder，例如 Hermes 用户画像）。
         """
         paths: set[str] = set()
+        protected = set(exclude_folders or [])
+        scroll_filter = None
+        if protected:
+            # 原生 must_not 过滤：服务端直接跳过受保护 folder 的点，
+            # 不经过 _to_qdrant_filter（它只支持精确匹配语义）。
+            scroll_filter = models.Filter(
+                must_not=[
+                    models.FieldCondition(
+                        key="metadata.folder",
+                        match=models.MatchAny(any=sorted(protected)),
+                    )
+                ]
+            )
         offset = None
         while True:
             points, offset = self.app.scroll(
                 collection_name=self.type,
+                scroll_filter=scroll_filter,
                 limit=256,
                 offset=offset,
                 with_payload=True,
                 with_vectors=False,
             )
             for point in points:
-                metadata = (point.payload or {}).get("metadata") or {}
-                src_path = metadata.get("src_path")
+                if protected:
+                    folder = (point.payload or {}).get("metadata", {}).get(
+                        "folder"
+                    )
+                    if folder in protected:
+                        continue
+                src_path = (point.payload or {}).get("metadata", {}).get(
+                    "src_path"
+                )
                 if src_path:
                     paths.add(src_path)
             if offset is None:

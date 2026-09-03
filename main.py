@@ -66,6 +66,7 @@ def create_filesystem_listener() -> Any:
         include_folders=config.obsidian_include_folders,
         exclude_folders=config.obsidian_exclude_folders,
         exclude_frontmatter=config.obsidian_exclude_frontmatter,
+        orphan_protect_folders=config.orphan_protect_folders,
     )
 
     # 用已有文件初始化 Qdrant 集合

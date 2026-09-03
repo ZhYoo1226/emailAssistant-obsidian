@@ -58,6 +58,10 @@ Two independent loops run side by side:
   vault is the single source of truth for Qdrant.
 - **Type filtering** — Excalidraw drawings, `.trash/` and `.obsidian/` files are skipped by default
   (they are not prose notes); the lists are plain `.env` entries you can edit.
+- **Protected folders** — orphan cleanup never touches points whose `metadata.folder` is listed in
+  `OBSIDIAN_ORPHAN_PROTECT_FOLDERS`, even when no corresponding vault file exists. This matters when the
+  collection is **shared with other writers** (see below): points written by external tools carry a virtual
+  `src_path` that never matches a real file, so without this guard startup cleanup would delete them.
 
 ### Note-quality recommendation
 
@@ -67,6 +71,30 @@ session-scoped dead links such as `vscode-webview://...` and broken table pipes 
 up in the sparse (BM25) vectors after jieba segmentation: dead-link hashes occupy vocabulary dimensions that no
 query will ever hit, diluting the sparse representation, and the real paths embedded inside them (which would
 otherwise be valuable for lexical retrieval) no longer match cleanly.
+
+### Sharing the collection with an external profile tool (Qdrant Cloud)
+
+This deployment shares one `knowledge-base` collection on **Qdrant Cloud** with an external tool
+(a Hermes plugin that stores user-profile points via the same hybrid-retrieval stack). Coexistence
+needs two `.env` entries — both are already set in this deployment:
+
+```dotenv
+# 1. Qdrant Cloud instead of local Docker
+QDRANT_LOCATION=https://<cluster-id>.saextent-1-0.aws.cloud.qdrant.io
+QDRANT_API_KEY=<key>
+QDRANT_COLLECTION_NAME=knowledge-base
+
+# 2. Coexistence with the external profile points
+OBSIDIAN_ORPHAN_PROTECT_FOLDERS=user-profile   # cleanup must not delete them (see above)
+OBSIDIAN_EXCLUDE_FOLDERS=.trash,.obsidian,user-profile  # watcher must not ingest their mirror .md files
+```
+
+The profile tool mirrors each of its points as `vault/user-profile/<point_id>.md` for human
+viewing/editing. Those mirrors live inside the vault but must never be ingested as notes — hence
+`user-profile` in `OBSIDIAN_EXCLUDE_FOLDERS`. With the exclusion in place, point and mirror stay
+1:1 and neither loop can create a duplicate of the other's data. (If the watcher was started
+**before** the exclusion was added, mirrors already ingested must be removed once, then the
+process restarted — the startup cleanup will not repeat the mistake.)
 
 ---
 
